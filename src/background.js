@@ -582,81 +582,187 @@ async function handleBackgroundMessage(message, sender) {
 }
 
 async function handleIncomingMessage(payload) {
+  console.log('[WhatsApp CRM Background] Received incoming message:', {
+    from: payload.from,
+    message: payload.message?.substring(0, 50),
+    timestamp: payload.timestamp,
+  });
+
   try {
     const settings = await storage.getSettings();
-    if (!settings.autoReply.enabled) return;
+    console.log('[WhatsApp CRM Background] Auto-reply enabled:', settings.autoReply?.enabled);
+    
+    if (!settings.autoReply?.enabled) {
+      console.log('[WhatsApp CRM Background] Auto-reply is disabled, skipping');
+      return;
+    }
 
     const rules = await storage.getAutoReplyRules();
-    const activeRules = rules.filter((r) => r.enabled).sort((a, b) => b.priority - a.priority);
+    console.log('[WhatsApp CRM Background] Found', rules.length, 'auto-reply rules');
+    
+    const activeRules = rules.filter((r) => r.enabled).sort((a, b) => (b.priority || 0) - (a.priority || 0));
+    console.log('[WhatsApp CRM Background] Active rules:', activeRules.length);
 
     for (const rule of activeRules) {
+      console.log('[WhatsApp CRM Background] Checking rule:', rule.name, 'keywords:', rule.keywords);
       if (await matchesRule(rule, payload)) {
+        console.log('[WhatsApp CRM Background] Rule matched:', rule.name);
         await triggerAutoReply(rule, payload.from);
         break;
       }
     }
   } catch (error) {
-    console.error('Error handling incoming message:', error);
+    console.error('[WhatsApp CRM Background] Error handling incoming message:', error);
   }
 }
 
 async function matchesRule(rule, payload) {
-  if (rule.blacklist && rule.blacklist.includes(payload.from)) return false;
-  if (rule.whitelist && rule.whitelist.length > 0 && !rule.whitelist.includes(payload.from)) return false;
+  if (rule.blacklist && rule.blacklist.includes(payload.from)) {
+    console.log('[WhatsApp CRM Background] Sender in blacklist, skipping rule:', rule.name);
+    return false;
+  }
+  if (rule.whitelist && rule.whitelist.length > 0 && !rule.whitelist.includes(payload.from)) {
+    console.log('[WhatsApp CRM Background] Sender not in whitelist, skipping rule:', rule.name);
+    return false;
+  }
 
   if (rule.businessHours?.enabled) {
     const now = new Date();
     const currentTime = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
-    if (currentTime < rule.businessHours.start || currentTime > rule.businessHours.end) return false;
+    if (currentTime < rule.businessHours.start || currentTime > rule.businessHours.end) {
+      console.log('[WhatsApp CRM Background] Outside business hours, skipping rule:', rule.name);
+      return false;
+    }
   }
 
   const messageText = payload.message.toLowerCase();
+  const matchType = rule.matchType || 'partial';
+  
   for (const keyword of rule.keywords) {
     let matches = false;
-    switch (rule.matchType) {
+    const keywordLower = keyword.toLowerCase();
+    
+    switch (matchType) {
       case 'exact':
-        matches = messageText === keyword.toLowerCase();
+        matches = messageText === keywordLower;
+        console.log('[WhatsApp CRM Background] Exact match check:', messageText, '===', keywordLower, ':', matches);
         break;
       case 'partial':
-        matches = messageText.includes(keyword.toLowerCase());
+        matches = messageText.includes(keywordLower);
+        console.log('[WhatsApp CRM Background] Partial match check:', messageText, 'includes', keywordLower, ':', matches);
         break;
       case 'regex':
         try {
           matches = new RegExp(keyword, 'i').test(messageText);
-        } catch {
-          console.error('Invalid regex:', keyword);
+          console.log('[WhatsApp CRM Background] Regex match check:', keyword, 'on', messageText, ':', matches);
+        } catch (e) {
+          console.error('[WhatsApp CRM Background] Invalid regex:', keyword, e);
         }
         break;
+      default:
+        matches = messageText.includes(keywordLower);
+        console.log('[WhatsApp CRM Background] Default partial match check:', messageText, 'includes', keywordLower, ':', matches);
     }
-    if (matches) return true;
+    if (matches) {
+      console.log('[WhatsApp CRM Background] Keyword matched:', keyword);
+      return true;
+    }
   }
+  console.log('[WhatsApp CRM Background] No keywords matched for rule:', rule.name);
   return false;
 }
 
 async function triggerAutoReply(rule, phoneNumber) {
+  console.log('[WhatsApp CRM Background] Triggering auto-reply for rule:', rule.name, 'to:', phoneNumber);
+  
   try {
     const response = rule.responses[Math.floor(Math.random() * rule.responses.length)];
+    console.log('[WhatsApp CRM Background] Selected response:', response.substring(0, 50));
+    
     const tabs = await chrome.tabs.query({ url: 'https://web.whatsapp.com/*' });
 
     if (tabs.length === 0 || !tabs[0].id) {
-      console.error('WhatsApp tab not found');
+      console.error('[WhatsApp CRM Background] WhatsApp tab not found');
       return;
     }
 
-    await chrome.tabs.sendMessage(tabs[0].id, {
-      type: 'SEND_MESSAGE',
+    const tab = tabs[0];
+    const sanitizedPhone = phoneNumber.replace(/[^\d]/g, '');
+    
+    if (!sanitizedPhone || sanitizedPhone === 'unknown') {
+      console.error('[WhatsApp CRM Background] Invalid phone number for auto-reply:', phoneNumber);
+      return;
+    }
+    
+    const targetUrl = `https://web.whatsapp.com/send?phone=${sanitizedPhone}`;
+    console.log('[WhatsApp CRM Background] Navigating to:', targetUrl);
+    
+    await chrome.tabs.update(tab.id, { url: targetUrl });
+    
+    await new Promise((resolve) => {
+      const checkTab = () => {
+        chrome.tabs.get(tab.id, (t) => {
+          if (t && t.status === 'complete') {
+            resolve();
+          } else {
+            setTimeout(checkTab, 500);
+          }
+        });
+      };
+      checkTab();
+    });
+    
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    
+    let chatReady = false;
+    let attempts = 0;
+    const maxAttempts = 10;
+
+    while (!chatReady && attempts < maxAttempts) {
+      try {
+        const checkResponse = await chrome.tabs.sendMessage(tab.id, {
+          type: 'CHECK_CHAT_READY',
+          payload: {},
+          timestamp: Date.now(),
+          id: crypto.randomUUID(),
+        });
+        chatReady = checkResponse && checkResponse.ready;
+        if (!chatReady) {
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+          attempts++;
+        }
+      } catch (error) {
+        console.log('[WhatsApp CRM Background] Waiting for content script...', attempts);
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        attempts++;
+      }
+    }
+
+    if (!chatReady) {
+      console.error('[WhatsApp CRM Background] Chat failed to load for auto-reply');
+      return;
+    }
+
+    console.log('[WhatsApp CRM Background] Chat ready, sending TYPE_AND_SEND');
+    const result = await chrome.tabs.sendMessage(tab.id, {
+      type: 'TYPE_AND_SEND',
       payload: {
-        phone: phoneNumber,
+        phone: sanitizedPhone,
         message: response,
+        attachments: [],
         queueItemId: `auto-reply-${Date.now()}`,
       },
       timestamp: Date.now(),
       id: crypto.randomUUID(),
     });
 
-    console.log('Auto-reply sent:', rule.name);
+    if (result && result.success) {
+      console.log('[WhatsApp CRM Background] Auto-reply sent successfully:', rule.name);
+    } else {
+      console.error('[WhatsApp CRM Background] Auto-reply failed:', result?.error);
+    }
   } catch (error) {
-    console.error('Error triggering auto-reply:', error);
+    console.error('[WhatsApp CRM Background] Error triggering auto-reply:', error);
   }
 }
 

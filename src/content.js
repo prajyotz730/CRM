@@ -370,41 +370,163 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-const messageObserver = new MutationObserver(() => {
-  checkForNewMessages();
-});
+const MESSAGE_SELECTORS = {
+  INCOMING_MESSAGE: [
+    'div.message-in',
+    'div[data-testid="msg-container"].message-in',
+    'div[class*="message-in"]',
+  ],
+  MESSAGE_TEXT: [
+    'span.selectable-text span',
+    'span[data-testid="conversation-text"]',
+    'span.selectable-text',
+    'div[data-testid="msg-text"] span',
+    'div.copyable-text span',
+  ],
+  CHAT_HEADER_TITLE: [
+    'span[data-testid="conversation-info-header-chat-title"]',
+    'header span[title]',
+    'div[data-testid="conversation-header"] span[title]',
+  ],
+};
 
-messageObserver.observe(document.body, { childList: true, subtree: true });
+let processedMessageIds = new Set();
+let lastProcessedTime = 0;
+const MESSAGE_COOLDOWN = 2000;
 
-let lastMessageCount = 0;
-
-function checkForNewMessages() {
-  const messages = document.querySelectorAll('div[data-pre-plain-text]');
-  if (messages.length > lastMessageCount) {
-    const newMessages = Array.from(messages).slice(lastMessageCount);
-    newMessages.forEach((msgElement) => {
-      const textSpan = msgElement.querySelector('span.selectable-text');
-      if (textSpan && textSpan.textContent) {
-        const messageText = textSpan.textContent;
-        const prePlainText = msgElement.getAttribute('data-pre-plain-text') || '';
-        const phoneMatch = prePlainText.match(/\d+/);
-        const from = phoneMatch ? phoneMatch[0] : 'unknown';
-
-        chrome.runtime.sendMessage({
-          type: 'INCOMING_MESSAGE',
-          payload: {
-            from: from,
-            message: messageText,
-            timestamp: Date.now(),
-          },
-          timestamp: Date.now(),
-          id: crypto.randomUUID(),
-        }).catch(() => {});
+function setupIncomingMessageObserver() {
+  console.log('[WhatsApp CRM] Setting up incoming message observer');
+  
+  const observer = new MutationObserver((mutations) => {
+    const now = Date.now();
+    if (now - lastProcessedTime < MESSAGE_COOLDOWN) {
+      return;
+    }
+    
+    for (const mutation of mutations) {
+      if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
+        for (const node of mutation.addedNodes) {
+          if (node.nodeType === Node.ELEMENT_NODE) {
+            checkNodeForIncomingMessage(node);
+          }
+        }
       }
-    });
-    lastMessageCount = messages.length;
+    }
+  });
+
+  observer.observe(document.body, { 
+    childList: true, 
+    subtree: true,
+    characterData: false,
+    attributes: false,
+  });
+  
+  console.log('[WhatsApp CRM] Incoming message observer active');
+  return observer;
+}
+
+function checkNodeForIncomingMessage(node) {
+  let incomingMessages = [];
+  
+  for (const selector of MESSAGE_SELECTORS.INCOMING_MESSAGE) {
+    if (node.matches && node.matches(selector)) {
+      incomingMessages.push(node);
+    }
+    const found = node.querySelectorAll ? node.querySelectorAll(selector) : [];
+    incomingMessages.push(...found);
+  }
+  
+  for (const msgElement of incomingMessages) {
+    processIncomingMessage(msgElement);
   }
 }
+
+function processIncomingMessage(msgElement) {
+  const messageId = msgElement.getAttribute('data-id') || 
+                    msgElement.getAttribute('data-testid') ||
+                    `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  
+  if (processedMessageIds.has(messageId)) {
+    return;
+  }
+  
+  if (msgElement.classList.contains('message-out') || 
+      msgElement.closest('.message-out') ||
+      msgElement.querySelector('[data-icon="msg-check"]') ||
+      msgElement.querySelector('[data-icon="msg-dblcheck"]')) {
+    console.log('[WhatsApp CRM] Skipping outgoing message');
+    return;
+  }
+  
+  let messageText = null;
+  for (const selector of MESSAGE_SELECTORS.MESSAGE_TEXT) {
+    const textElement = msgElement.querySelector(selector);
+    if (textElement && textElement.textContent) {
+      messageText = textElement.textContent.trim();
+      break;
+    }
+  }
+  
+  if (!messageText) {
+    console.log('[WhatsApp CRM] No message text found in element');
+    return;
+  }
+  
+  const phoneNumber = getCurrentChatPhone();
+  
+  console.log('[WhatsApp CRM] New incoming message detected:', {
+    text: messageText.substring(0, 50) + (messageText.length > 50 ? '...' : ''),
+    from: phoneNumber,
+    messageId: messageId,
+  });
+  
+  processedMessageIds.add(messageId);
+  lastProcessedTime = Date.now();
+  
+  if (processedMessageIds.size > 100) {
+    const idsArray = Array.from(processedMessageIds);
+    processedMessageIds = new Set(idsArray.slice(-50));
+  }
+  
+  chrome.runtime.sendMessage({
+    type: 'INCOMING_MESSAGE',
+    payload: {
+      from: phoneNumber,
+      message: messageText,
+      timestamp: Date.now(),
+      messageId: messageId,
+    },
+    timestamp: Date.now(),
+    id: crypto.randomUUID(),
+  }).then((response) => {
+    console.log('[WhatsApp CRM] Background acknowledged incoming message:', response);
+  }).catch((error) => {
+    console.error('[WhatsApp CRM] Error sending incoming message to background:', error);
+  });
+}
+
+function getCurrentChatPhone() {
+  const urlMatch = window.location.href.match(/phone=(\d+)/);
+  if (urlMatch) {
+    return urlMatch[1];
+  }
+  
+  for (const selector of MESSAGE_SELECTORS.CHAT_HEADER_TITLE) {
+    const headerElement = document.querySelector(selector);
+    if (headerElement) {
+      const title = headerElement.getAttribute('title') || headerElement.textContent;
+      const phoneMatch = title.match(/\+?[\d\s-]{10,}/);
+      if (phoneMatch) {
+        return phoneMatch[0].replace(/[\s-]/g, '');
+      }
+      return title;
+    }
+  }
+  
+  return 'unknown';
+}
+
+const incomingMessageObserver = setupIncomingMessageObserver();
 
 const sentMessageObserver = new MutationObserver((mutations) => {
   for (const mutation of mutations) {
