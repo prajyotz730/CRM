@@ -1,0 +1,42 @@
+{
+  "manifest_version": 3,
+  "name": "SUS WhatsApp CRM",
+  "version": "1.0.0",
+  "description": "Complete WhatsApp CRM with bulk messaging, auto-reply, and contact management that works in background",
+  "permissions": [
+    "storage",
+    "tabs",
+    "alarms",
+    "notifications",
+    "scripting",
+    "activeTab",
+    "unlimitedStorage"
+  ],
+  "host_permissions": [
+    "https://web.whatsapp.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "index.html",
+    "default_icon": {
+      "16": "icon16.svg",
+      "48": "icon48.svg",
+      "128": "icon128.svg"
+    }
+  },
+  "icons": {
+    "16": "icon16.svg",
+    "48": "icon48.svg",
+    "128": "icon128.svg"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://web.whatsapp.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

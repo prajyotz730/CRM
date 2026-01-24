@@ -1,0 +1,26 @@
+{
+  "name": "whatsapp-crm-extension",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Complete WhatsApp CRM with bulk messaging, auto-reply, and contact management",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "lint": "eslint src --ext .js,.jsx",
+    "preview": "vite preview"
+  },
+  "keywords": ["whatsapp", "crm", "chrome-extension"],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/chrome": "^0.0.260",
+    "@vitejs/plugin-react": "^4.2.1",
+    "eslint": "^8.56.0",
+    "vite": "^5.0.12"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "xlsx": "^0.18.5"
+  }
+}
