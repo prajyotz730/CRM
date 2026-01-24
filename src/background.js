@@ -262,9 +262,42 @@ class CampaignManager {
       const tab = await messageBus.getWhatsAppTab();
       if (!tab || !tab.id) throw new Error('WhatsApp tab not found');
 
-      const messageType = item.attachments && item.attachments.length > 0 
-        ? 'SEND_MESSAGE_WITH_ATTACHMENT' 
-        : 'SEND_MESSAGE';
+      const sanitizedPhone = item.phone.replace(/[^\d]/g, '');
+      const targetUrl = `https://web.whatsapp.com/send?phone=${sanitizedPhone}`;
+
+      console.log('Navigating to:', targetUrl);
+      await chrome.tabs.update(tab.id, { url: targetUrl });
+
+      await this.waitForTabLoad(tab.id);
+      await this.sleep(3000);
+
+      let chatReady = false;
+      let attempts = 0;
+      const maxAttempts = 10;
+
+      while (!chatReady && attempts < maxAttempts) {
+        try {
+          const response = await chrome.tabs.sendMessage(tab.id, {
+            type: 'CHECK_CHAT_READY',
+            payload: {},
+            timestamp: Date.now(),
+            id: crypto.randomUUID(),
+          });
+          chatReady = response && response.ready;
+          if (!chatReady) {
+            await this.sleep(2000);
+            attempts++;
+          }
+        } catch (error) {
+          console.log('Waiting for content script...', attempts);
+          await this.sleep(2000);
+          attempts++;
+        }
+      }
+
+      if (!chatReady) {
+        throw new Error('Chat failed to load after navigation');
+      }
 
       const payload = {
         phone: item.phone,
@@ -273,14 +306,42 @@ class CampaignManager {
         queueItemId: item.id,
       };
 
-      await messageBus.sendToTab(tab.id, messageType, payload);
+      console.log('Sending TYPE_AND_SEND message');
+      const result = await chrome.tabs.sendMessage(tab.id, {
+        type: 'TYPE_AND_SEND',
+        payload: payload,
+        timestamp: Date.now(),
+        id: crypto.randomUUID(),
+      });
+
+      if (result && result.success) {
+        await this.handleMessageSent(item.id);
+      } else {
+        throw new Error(result?.error || 'Failed to send message');
+      }
 
       const delay = this.getRandomDelay(settings.sending.minDelay, settings.sending.maxDelay);
       await this.sleep(delay);
     } catch (error) {
       console.error('Error processing queue item:', error);
-      await this.handleFailedItem(item);
+      await this.handleFailedItem(item, error.message);
+      setTimeout(() => this.processQueue(), 1000);
     }
+  }
+
+  async waitForTabLoad(tabId) {
+    return new Promise((resolve) => {
+      const checkTab = () => {
+        chrome.tabs.get(tabId, (tab) => {
+          if (tab && tab.status === 'complete') {
+            resolve();
+          } else {
+            setTimeout(checkTab, 500);
+          }
+        });
+      };
+      checkTab();
+    });
   }
 
   async handleMessageSent(queueItemId) {

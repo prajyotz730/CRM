@@ -39,6 +39,10 @@ async function handleMessage(message) {
       return await sendMessageWithAttachment(message.payload);
     case 'CHECK_WHATSAPP_CONNECTION':
       return { connected: isWhatsAppConnected() };
+    case 'CHECK_CHAT_READY':
+      return await checkChatReady();
+    case 'TYPE_AND_SEND':
+      return await typeAndSend(message.payload);
     case 'GET_CONTACTS':
       return await getWhatsAppContacts();
     case 'GET_LABELS':
@@ -52,15 +56,54 @@ function isWhatsAppConnected() {
   return document.querySelector(SELECTORS.SEARCH_BOX) !== null;
 }
 
+async function checkChatReady() {
+  try {
+    const messageBox = await waitForElement(SELECTORS.MESSAGE_BOX, 15000);
+    return { ready: messageBox !== null };
+  } catch (error) {
+    return { ready: false, error: error.message };
+  }
+}
+
+async function typeAndSend(payload) {
+  try {
+    console.log('Typing and sending message for:', payload.queueItemId);
+
+    await waitForElement(SELECTORS.MESSAGE_BOX, 15000);
+
+    if (payload.attachments && payload.attachments.length > 0) {
+      for (const attachment of payload.attachments) {
+        if (attachment.type === 'image') {
+          await sendImageAsMedia(attachment);
+        } else {
+          await sendDocument(attachment);
+        }
+        await sleep(1500);
+      }
+    }
+
+    if (payload.message && payload.message.trim()) {
+      await typeMessage(payload.message);
+      await sleep(500);
+
+      if (await clickSendButton()) {
+        await waitForMessageSent(payload.queueItemId);
+        return { success: true };
+      } else {
+        throw new Error('Failed to click send button');
+      }
+    }
+
+    return { success: true };
+  } catch (error) {
+    console.error('Error in typeAndSend:', error);
+    return { success: false, error: error.message };
+  }
+}
+
 async function sendMessage(payload) {
   try {
     console.log('Sending message to:', payload.phone);
-
-    const url = `https://web.whatsapp.com/send?phone=${sanitizePhone(payload.phone)}`;
-    if (window.location.href !== url) {
-      window.location.href = url;
-      await waitForChatToLoad();
-    }
 
     await waitForElement(SELECTORS.MESSAGE_BOX, 15000);
 
@@ -75,26 +118,13 @@ async function sendMessage(payload) {
     await sleep(500);
 
     if (await clickSendButton()) {
-      const messageSent = await waitForMessageSent(payload.queueItemId);
-      
-      await chrome.runtime.sendMessage({
-        type: 'MESSAGE_SENT',
-        payload: { queueItemId: payload.queueItemId },
-        timestamp: Date.now(),
-        id: crypto.randomUUID(),
-      });
+      await waitForMessageSent(payload.queueItemId);
       return { success: true };
     } else {
       throw new Error('Failed to click send button');
     }
   } catch (error) {
     console.error('Error sending message:', error);
-    await chrome.runtime.sendMessage({
-      type: 'MESSAGE_FAILED',
-      payload: { queueItemId: payload.queueItemId, error: error.message },
-      timestamp: Date.now(),
-      id: crypto.randomUUID(),
-    });
     return { success: false, error: error.message };
   }
 }
@@ -102,12 +132,6 @@ async function sendMessage(payload) {
 async function sendMessageWithAttachment(payload) {
   try {
     console.log('Sending message with attachment to:', payload.phone);
-
-    const url = `https://web.whatsapp.com/send?phone=${sanitizePhone(payload.phone)}`;
-    if (window.location.href !== url) {
-      window.location.href = url;
-      await waitForChatToLoad();
-    }
 
     await waitForElement(SELECTORS.MESSAGE_BOX, 15000);
 
@@ -126,21 +150,9 @@ async function sendMessageWithAttachment(payload) {
       await clickSendButton();
     }
 
-    await chrome.runtime.sendMessage({
-      type: 'MESSAGE_SENT',
-      payload: { queueItemId: payload.queueItemId },
-      timestamp: Date.now(),
-      id: crypto.randomUUID(),
-    });
     return { success: true };
   } catch (error) {
     console.error('Error sending message with attachment:', error);
-    await chrome.runtime.sendMessage({
-      type: 'MESSAGE_FAILED',
-      payload: { queueItemId: payload.queueItemId, error: error.message },
-      timestamp: Date.now(),
-      id: crypto.randomUUID(),
-    });
     return { success: false, error: error.message };
   }
 }
