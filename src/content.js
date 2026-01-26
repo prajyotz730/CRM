@@ -530,12 +530,23 @@ function processIncomingMessage(msgElement) {
 }
 
 function extractPhoneFromMessageElement(msgElement) {
+  const phonePatterns = [
+    /false_(\d+)@/,
+    /true_(\d+)@/,
+    /(\d{10,15})@c\.us/,
+    /(\d{10,15})@s\.whatsapp\.net/,
+  ];
+  
   const dataId = msgElement.getAttribute('data-id');
+  console.log('[WhatsApp CRM] Message element data-id:', dataId);
+  
   if (dataId) {
-    const phoneMatch = dataId.match(/true_(\d+)@/);
-    if (phoneMatch) {
-      console.log('[WhatsApp CRM] Phone from message data-id:', phoneMatch[1]);
-      return phoneMatch[1];
+    for (const pattern of phonePatterns) {
+      const phoneMatch = dataId.match(pattern);
+      if (phoneMatch && phoneMatch[1].length >= 10) {
+        console.log('[WhatsApp CRM] Phone from message data-id:', phoneMatch[1]);
+        return phoneMatch[1];
+      }
     }
   }
   
@@ -543,10 +554,12 @@ function extractPhoneFromMessageElement(msgElement) {
   for (let i = 0; i < 10 && parent; i++) {
     const parentDataId = parent.getAttribute('data-id');
     if (parentDataId) {
-      const phoneMatch = parentDataId.match(/true_(\d+)@/);
-      if (phoneMatch) {
-        console.log('[WhatsApp CRM] Phone from parent data-id:', phoneMatch[1]);
-        return phoneMatch[1];
+      for (const pattern of phonePatterns) {
+        const phoneMatch = parentDataId.match(pattern);
+        if (phoneMatch && phoneMatch[1].length >= 10) {
+          console.log('[WhatsApp CRM] Phone from parent data-id:', phoneMatch[1]);
+          return phoneMatch[1];
+        }
       }
     }
     parent = parent.parentElement;
@@ -555,11 +568,37 @@ function extractPhoneFromMessageElement(msgElement) {
   const messageRow = msgElement.closest('[data-id]');
   if (messageRow) {
     const rowDataId = messageRow.getAttribute('data-id');
+    console.log('[WhatsApp CRM] Message row data-id:', rowDataId);
     if (rowDataId) {
-      const phoneMatch = rowDataId.match(/true_(\d+)@/);
-      if (phoneMatch) {
-        console.log('[WhatsApp CRM] Phone from row data-id:', phoneMatch[1]);
-        return phoneMatch[1];
+      for (const pattern of phonePatterns) {
+        const phoneMatch = rowDataId.match(pattern);
+        if (phoneMatch && phoneMatch[1].length >= 10) {
+          console.log('[WhatsApp CRM] Phone from row data-id:', phoneMatch[1]);
+          return phoneMatch[1];
+        }
+      }
+    }
+  }
+  
+  const activeChatItem = document.querySelector('[data-testid="cell-frame-container"][aria-selected="true"]') ||
+                         document.querySelector('[data-testid="list-item-container"][aria-selected="true"]') ||
+                         document.querySelector('div[tabindex="-1"][data-id]');
+  
+  if (activeChatItem) {
+    const chatDataId = activeChatItem.getAttribute('data-id');
+    console.log('[WhatsApp CRM] Active chat data-id:', chatDataId);
+    if (chatDataId) {
+      for (const pattern of phonePatterns) {
+        const phoneMatch = chatDataId.match(pattern);
+        if (phoneMatch && phoneMatch[1].length >= 10) {
+          console.log('[WhatsApp CRM] Phone from active chat:', phoneMatch[1]);
+          return phoneMatch[1];
+        }
+      }
+      const simpleMatch = chatDataId.match(/(\d{10,15})/);
+      if (simpleMatch) {
+        console.log('[WhatsApp CRM] Phone from active chat (simple):', simpleMatch[1]);
+        return simpleMatch[1];
       }
     }
   }
@@ -570,11 +609,43 @@ function extractPhoneFromMessageElement(msgElement) {
 let lastKnownPhoneNumber = null;
 
 function getCurrentChatPhone() {
+  console.log('[WhatsApp CRM] getCurrentChatPhone called, URL:', window.location.href);
+  
   const urlMatch = window.location.href.match(/phone=(\d+)/);
   if (urlMatch) {
     lastKnownPhoneNumber = urlMatch[1];
     console.log('[WhatsApp CRM] Phone from URL:', lastKnownPhoneNumber);
     return lastKnownPhoneNumber;
+  }
+  
+  const conversationPanel = document.querySelector('[data-testid="conversation-panel-wrapper"]');
+  if (conversationPanel) {
+    const panelDataId = conversationPanel.getAttribute('data-id');
+    console.log('[WhatsApp CRM] Conversation panel data-id:', panelDataId);
+    if (panelDataId) {
+      const phoneMatch = panelDataId.match(/(\d{10,15})/);
+      if (phoneMatch) {
+        lastKnownPhoneNumber = phoneMatch[1];
+        console.log('[WhatsApp CRM] Phone from conversation panel:', lastKnownPhoneNumber);
+        return lastKnownPhoneNumber;
+      }
+    }
+  }
+  
+  const chatListItems = document.querySelectorAll('[data-testid="cell-frame-container"], [data-testid="list-item-container"]');
+  for (const item of chatListItems) {
+    if (item.getAttribute('aria-selected') === 'true' || item.classList.contains('_amjy')) {
+      const itemDataId = item.getAttribute('data-id');
+      console.log('[WhatsApp CRM] Selected chat item data-id:', itemDataId);
+      if (itemDataId) {
+        const phoneMatch = itemDataId.match(/(\d{10,15})@/);
+        if (phoneMatch) {
+          lastKnownPhoneNumber = phoneMatch[1];
+          console.log('[WhatsApp CRM] Phone from selected chat item:', lastKnownPhoneNumber);
+          return lastKnownPhoneNumber;
+        }
+      }
+    }
   }
   
   const phoneSelectors = [
@@ -589,6 +660,7 @@ function getCurrentChatPhone() {
     const headerElement = document.querySelector(selector);
     if (headerElement) {
       const title = headerElement.getAttribute('title') || headerElement.textContent || '';
+      console.log('[WhatsApp CRM] Header element title:', title);
       const phoneMatch = title.match(/^\+?[\d\s\-()]{10,}$/);
       if (phoneMatch) {
         const cleanPhone = phoneMatch[0].replace(/[\s\-()]/g, '');
@@ -623,7 +695,7 @@ function getCurrentChatPhone() {
     return lastKnownPhoneNumber;
   }
   
-  console.log('[WhatsApp CRM] Could not extract phone number');
+  console.log('[WhatsApp CRM] Could not extract phone number from any source');
   return 'unknown';
 }
 
