@@ -43,6 +43,8 @@ async function handleMessage(message) {
       return await checkChatReady();
     case 'TYPE_AND_SEND':
       return await typeAndSend(message.payload);
+    case 'GET_CURRENT_PHONE':
+      return await getCurrentPhoneWithRetry();
     case 'GET_CONTACTS':
       return await getWhatsAppContacts();
     case 'GET_LABELS':
@@ -50,6 +52,24 @@ async function handleMessage(message) {
     default:
       return { error: 'Unknown message type' };
   }
+}
+
+async function getCurrentPhoneWithRetry() {
+  console.log('[WhatsApp CRM] Getting current phone with retry...');
+  
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const phone = getCurrentChatPhone();
+    if (phone && phone !== 'unknown' && /^\+?\d{10,15}$/.test(phone.replace(/[\s\-()]/g, ''))) {
+      console.log('[WhatsApp CRM] Got valid phone on attempt', attempt + 1, ':', phone);
+      return { phone: phone, success: true };
+    }
+    
+    console.log('[WhatsApp CRM] Phone extraction attempt', attempt + 1, 'failed, waiting...');
+    await sleep(1000);
+  }
+  
+  console.log('[WhatsApp CRM] Failed to get phone after 5 attempts');
+  return { phone: 'unknown', success: false };
 }
 
 function isWhatsAppConnected() {
@@ -472,7 +492,11 @@ function processIncomingMessage(msgElement) {
     return;
   }
   
-  const phoneNumber = getCurrentChatPhone();
+  let phoneNumber = extractPhoneFromMessageElement(msgElement);
+  
+  if (!phoneNumber || phoneNumber === 'unknown') {
+    phoneNumber = getCurrentChatPhone();
+  }
   
   console.log('[WhatsApp CRM] New incoming message detected:', {
     text: messageText.substring(0, 50) + (messageText.length > 50 ? '...' : ''),
@@ -503,6 +527,44 @@ function processIncomingMessage(msgElement) {
   }).catch((error) => {
     console.error('[WhatsApp CRM] Error sending incoming message to background:', error);
   });
+}
+
+function extractPhoneFromMessageElement(msgElement) {
+  const dataId = msgElement.getAttribute('data-id');
+  if (dataId) {
+    const phoneMatch = dataId.match(/true_(\d+)@/);
+    if (phoneMatch) {
+      console.log('[WhatsApp CRM] Phone from message data-id:', phoneMatch[1]);
+      return phoneMatch[1];
+    }
+  }
+  
+  let parent = msgElement;
+  for (let i = 0; i < 10 && parent; i++) {
+    const parentDataId = parent.getAttribute('data-id');
+    if (parentDataId) {
+      const phoneMatch = parentDataId.match(/true_(\d+)@/);
+      if (phoneMatch) {
+        console.log('[WhatsApp CRM] Phone from parent data-id:', phoneMatch[1]);
+        return phoneMatch[1];
+      }
+    }
+    parent = parent.parentElement;
+  }
+  
+  const messageRow = msgElement.closest('[data-id]');
+  if (messageRow) {
+    const rowDataId = messageRow.getAttribute('data-id');
+    if (rowDataId) {
+      const phoneMatch = rowDataId.match(/true_(\d+)@/);
+      if (phoneMatch) {
+        console.log('[WhatsApp CRM] Phone from row data-id:', phoneMatch[1]);
+        return phoneMatch[1];
+      }
+    }
+  }
+  
+  return null;
 }
 
 let lastKnownPhoneNumber = null;

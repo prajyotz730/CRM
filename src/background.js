@@ -687,7 +687,27 @@ async function triggerAutoReply(rule, phoneNumber) {
     }
 
     const tab = tabs[0];
-    const sanitizedPhone = phoneNumber.replace(/[^\d+]/g, '').replace(/^\+/, '');
+    let sanitizedPhone = phoneNumber.replace(/[^\d+]/g, '').replace(/^\+/, '');
+    
+    if (!sanitizedPhone || sanitizedPhone === 'unknown' || sanitizedPhone.length < 10 || !/^\d+$/.test(sanitizedPhone)) {
+      console.log('[WhatsApp CRM Background] Phone invalid, requesting from content script...');
+      
+      try {
+        const phoneResponse = await chrome.tabs.sendMessage(tab.id, {
+          type: 'GET_CURRENT_PHONE',
+          payload: {},
+          timestamp: Date.now(),
+          id: crypto.randomUUID(),
+        });
+        
+        if (phoneResponse && phoneResponse.success && phoneResponse.phone) {
+          sanitizedPhone = phoneResponse.phone.replace(/[^\d+]/g, '').replace(/^\+/, '');
+          console.log('[WhatsApp CRM Background] Got phone from content script:', sanitizedPhone);
+        }
+      } catch (error) {
+        console.error('[WhatsApp CRM Background] Failed to get phone from content script:', error);
+      }
+    }
     
     if (!sanitizedPhone || sanitizedPhone === 'unknown' || sanitizedPhone.length < 10 || sanitizedPhone.length > 15 || !/^\d+$/.test(sanitizedPhone)) {
       console.error('[WhatsApp CRM Background] Invalid phone number for auto-reply:', phoneNumber, '(cleaned:', sanitizedPhone, ')');
