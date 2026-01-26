@@ -715,6 +715,17 @@ async function triggerAutoReply(rule, phoneNumber) {
       return;
     }
     
+    try {
+      await chrome.tabs.sendMessage(tab.id, {
+        type: 'SET_AUTO_REPLY_PROCESSING',
+        payload: { processing: true },
+        timestamp: Date.now(),
+        id: crypto.randomUUID(),
+      });
+    } catch (e) {
+      console.log('[WhatsApp CRM Background] Could not set processing flag (tab may be navigating)');
+    }
+    
     const targetUrl = `https://web.whatsapp.com/send?phone=${sanitizedPhone}`;
     console.log('[WhatsApp CRM Background] Navigating to:', targetUrl);
     
@@ -733,7 +744,7 @@ async function triggerAutoReply(rule, phoneNumber) {
       checkTab();
     });
     
-    await new Promise((resolve) => setTimeout(resolve, 3000));
+    await new Promise((resolve) => setTimeout(resolve, 4000));
     
     let chatReady = false;
     let attempts = 0;
@@ -764,6 +775,17 @@ async function triggerAutoReply(rule, phoneNumber) {
       return;
     }
 
+    try {
+      await chrome.tabs.sendMessage(tab.id, {
+        type: 'SET_AUTO_REPLY_PROCESSING',
+        payload: { processing: true },
+        timestamp: Date.now(),
+        id: crypto.randomUUID(),
+      });
+    } catch (e) {
+      console.log('[WhatsApp CRM Background] Could not set processing flag');
+    }
+
     console.log('[WhatsApp CRM Background] Chat ready, sending TYPE_AND_SEND');
     const result = await chrome.tabs.sendMessage(tab.id, {
       type: 'TYPE_AND_SEND',
@@ -781,6 +803,17 @@ async function triggerAutoReply(rule, phoneNumber) {
       console.log('[WhatsApp CRM Background] Auto-reply sent successfully:', rule.name);
     } else {
       console.error('[WhatsApp CRM Background] Auto-reply failed:', result?.error);
+    }
+    
+    try {
+      await chrome.tabs.sendMessage(tab.id, {
+        type: 'SET_AUTO_REPLY_PROCESSING',
+        payload: { processing: false },
+        timestamp: Date.now(),
+        id: crypto.randomUUID(),
+      });
+    } catch (e) {
+      console.log('[WhatsApp CRM Background] Could not reset processing flag');
     }
   } catch (error) {
     console.error('[WhatsApp CRM Background] Error triggering auto-reply:', error);

@@ -45,6 +45,10 @@ async function handleMessage(message) {
       return await typeAndSend(message.payload);
     case 'GET_CURRENT_PHONE':
       return await getCurrentPhoneWithRetry();
+    case 'SET_AUTO_REPLY_PROCESSING':
+      isProcessingAutoReply = message.payload?.processing || false;
+      console.log('[WhatsApp CRM] Auto-reply processing set to:', isProcessingAutoReply);
+      return { success: true };
     case 'GET_CONTACTS':
       return await getWhatsAppContacts();
     case 'GET_LABELS':
@@ -411,13 +415,21 @@ const MESSAGE_SELECTORS = {
 };
 
 let processedMessageIds = new Set();
+let processedMessageTexts = new Map();
 let lastProcessedTime = 0;
-const MESSAGE_COOLDOWN = 2000;
+const MESSAGE_COOLDOWN = 3000;
+const MESSAGE_TEXT_COOLDOWN = 30000;
+let isProcessingAutoReply = false;
 
 function setupIncomingMessageObserver() {
   console.log('[WhatsApp CRM] Setting up incoming message observer');
   
   const observer = new MutationObserver((mutations) => {
+    if (isProcessingAutoReply) {
+      console.log('[WhatsApp CRM] Skipping - auto-reply in progress');
+      return;
+    }
+    
     const now = Date.now();
     if (now - lastProcessedTime < MESSAGE_COOLDOWN) {
       return;
@@ -461,7 +473,62 @@ function checkNodeForIncomingMessage(node) {
   }
 }
 
+function debugDumpDOMInfo(msgElement) {
+  console.log('[WhatsApp CRM DEBUG] ========== DOM DUMP START ==========');
+  
+  console.log('[WhatsApp CRM DEBUG] Message element tag:', msgElement.tagName);
+  console.log('[WhatsApp CRM DEBUG] Message element classes:', msgElement.className);
+  console.log('[WhatsApp CRM DEBUG] Message element data-id:', msgElement.getAttribute('data-id'));
+  console.log('[WhatsApp CRM DEBUG] Message element data-testid:', msgElement.getAttribute('data-testid'));
+  
+  const allDataIds = [];
+  let parent = msgElement;
+  for (let i = 0; i < 15 && parent; i++) {
+    const dataId = parent.getAttribute('data-id');
+    if (dataId) {
+      allDataIds.push({ level: i, tag: parent.tagName, dataId: dataId });
+    }
+    parent = parent.parentElement;
+  }
+  console.log('[WhatsApp CRM DEBUG] All parent data-ids:', JSON.stringify(allDataIds, null, 2));
+  
+  const nearbyDataIds = document.querySelectorAll('[data-id]');
+  const dataIdSamples = [];
+  nearbyDataIds.forEach((el, idx) => {
+    if (idx < 20) {
+      dataIdSamples.push(el.getAttribute('data-id'));
+    }
+  });
+  console.log('[WhatsApp CRM DEBUG] Sample data-ids in DOM:', dataIdSamples);
+  
+  const chatListItems = document.querySelectorAll('[data-testid="cell-frame-container"], [data-testid="list-item-container"], [role="listitem"]');
+  console.log('[WhatsApp CRM DEBUG] Chat list items found:', chatListItems.length);
+  chatListItems.forEach((item, idx) => {
+    if (idx < 5) {
+      console.log('[WhatsApp CRM DEBUG] Chat item', idx, '- data-id:', item.getAttribute('data-id'), 'aria-selected:', item.getAttribute('aria-selected'));
+    }
+  });
+  
+  const header = document.querySelector('header');
+  if (header) {
+    const headerSpans = header.querySelectorAll('span[title], span[data-testid]');
+    headerSpans.forEach((span, idx) => {
+      if (idx < 5) {
+        console.log('[WhatsApp CRM DEBUG] Header span', idx, '- title:', span.getAttribute('title'), 'data-testid:', span.getAttribute('data-testid'), 'text:', span.textContent?.substring(0, 50));
+      }
+    });
+  }
+  
+  console.log('[WhatsApp CRM DEBUG] Current URL:', window.location.href);
+  console.log('[WhatsApp CRM DEBUG] ========== DOM DUMP END ==========');
+}
+
 function processIncomingMessage(msgElement) {
+  if (isProcessingAutoReply) {
+    console.log('[WhatsApp CRM] Skipping message - auto-reply in progress');
+    return;
+  }
+  
   const messageId = msgElement.getAttribute('data-id') || 
                     msgElement.getAttribute('data-testid') ||
                     `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -492,6 +559,14 @@ function processIncomingMessage(msgElement) {
     return;
   }
   
+  const now = Date.now();
+  const textKey = messageText.toLowerCase().trim();
+  const lastProcessedForText = processedMessageTexts.get(textKey);
+  if (lastProcessedForText && (now - lastProcessedForText) < MESSAGE_TEXT_COOLDOWN) {
+    console.log('[WhatsApp CRM] Skipping duplicate message text within cooldown:', textKey);
+    return;
+  }
+  
   let phoneNumber = extractPhoneFromMessageElement(msgElement);
   
   if (!phoneNumber || phoneNumber === 'unknown') {
@@ -505,11 +580,18 @@ function processIncomingMessage(msgElement) {
   });
   
   processedMessageIds.add(messageId);
-  lastProcessedTime = Date.now();
+  processedMessageTexts.set(textKey, now);
+  lastProcessedTime = now;
   
   if (processedMessageIds.size > 100) {
     const idsArray = Array.from(processedMessageIds);
     processedMessageIds = new Set(idsArray.slice(-50));
+  }
+  
+  if (processedMessageTexts.size > 50) {
+    const entries = Array.from(processedMessageTexts.entries());
+    entries.sort((a, b) => b[1] - a[1]);
+    processedMessageTexts = new Map(entries.slice(0, 25));
   }
   
   chrome.runtime.sendMessage({
@@ -517,10 +599,10 @@ function processIncomingMessage(msgElement) {
     payload: {
       from: phoneNumber,
       message: messageText,
-      timestamp: Date.now(),
+      timestamp: now,
       messageId: messageId,
     },
-    timestamp: Date.now(),
+    timestamp: now,
     id: crypto.randomUUID(),
   }).then((response) => {
     console.log('[WhatsApp CRM] Background acknowledged incoming message:', response);
