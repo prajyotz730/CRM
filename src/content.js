@@ -505,24 +505,63 @@ function processIncomingMessage(msgElement) {
   });
 }
 
+let lastKnownPhoneNumber = null;
+
 function getCurrentChatPhone() {
   const urlMatch = window.location.href.match(/phone=(\d+)/);
   if (urlMatch) {
-    return urlMatch[1];
+    lastKnownPhoneNumber = urlMatch[1];
+    console.log('[WhatsApp CRM] Phone from URL:', lastKnownPhoneNumber);
+    return lastKnownPhoneNumber;
   }
   
-  for (const selector of MESSAGE_SELECTORS.CHAT_HEADER_TITLE) {
+  const phoneSelectors = [
+    'span[data-testid="conversation-info-header-chat-title"]',
+    'header span[title]',
+    'div[data-testid="conversation-header"] span[title]',
+    'span._ao3e[title]',
+    'div[data-testid="chat-title"] span[title]',
+  ];
+  
+  for (const selector of phoneSelectors) {
     const headerElement = document.querySelector(selector);
     if (headerElement) {
-      const title = headerElement.getAttribute('title') || headerElement.textContent;
-      const phoneMatch = title.match(/\+?[\d\s-]{10,}/);
+      const title = headerElement.getAttribute('title') || headerElement.textContent || '';
+      const phoneMatch = title.match(/^\+?[\d\s\-()]{10,}$/);
       if (phoneMatch) {
-        return phoneMatch[0].replace(/[\s-]/g, '');
+        const cleanPhone = phoneMatch[0].replace(/[\s\-()]/g, '');
+        if (cleanPhone.length >= 10 && /^\+?\d+$/.test(cleanPhone)) {
+          lastKnownPhoneNumber = cleanPhone;
+          console.log('[WhatsApp CRM] Phone from header:', lastKnownPhoneNumber);
+          return lastKnownPhoneNumber;
+        }
       }
-      return title;
     }
   }
   
+  const aboutSection = document.querySelector('span[data-testid="about"]');
+  if (aboutSection) {
+    const parent = aboutSection.closest('[data-testid="contact-info-drawer"]');
+    if (parent) {
+      const phoneElement = parent.querySelector('span[data-testid="phone-number"]');
+      if (phoneElement) {
+        const phoneText = phoneElement.textContent || '';
+        const cleanPhone = phoneText.replace(/[\s\-()]/g, '');
+        if (cleanPhone.length >= 10 && /^\+?\d+$/.test(cleanPhone)) {
+          lastKnownPhoneNumber = cleanPhone;
+          console.log('[WhatsApp CRM] Phone from contact info:', lastKnownPhoneNumber);
+          return lastKnownPhoneNumber;
+        }
+      }
+    }
+  }
+  
+  if (lastKnownPhoneNumber) {
+    console.log('[WhatsApp CRM] Using last known phone:', lastKnownPhoneNumber);
+    return lastKnownPhoneNumber;
+  }
+  
+  console.log('[WhatsApp CRM] Could not extract phone number');
   return 'unknown';
 }
 

@@ -687,10 +687,11 @@ async function triggerAutoReply(rule, phoneNumber) {
     }
 
     const tab = tabs[0];
-    const sanitizedPhone = phoneNumber.replace(/[^\d]/g, '');
+    const sanitizedPhone = phoneNumber.replace(/[^\d+]/g, '').replace(/^\+/, '');
     
-    if (!sanitizedPhone || sanitizedPhone === 'unknown') {
-      console.error('[WhatsApp CRM Background] Invalid phone number for auto-reply:', phoneNumber);
+    if (!sanitizedPhone || sanitizedPhone === 'unknown' || sanitizedPhone.length < 10 || sanitizedPhone.length > 15 || !/^\d+$/.test(sanitizedPhone)) {
+      console.error('[WhatsApp CRM Background] Invalid phone number for auto-reply:', phoneNumber, '(cleaned:', sanitizedPhone, ')');
+      console.error('[WhatsApp CRM Background] Phone must be 10-15 digits. Got:', sanitizedPhone.length, 'digits');
       return;
     }
     
