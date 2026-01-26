@@ -569,8 +569,10 @@ async function handleBackgroundMessage(message, sender) {
       return { success: true };
 
     case 'INCOMING_MESSAGE':
-      await handleIncomingMessage(message.payload);
-      return { success: true };
+      handleIncomingMessage(message.payload).catch((err) => {
+        console.error('[WhatsApp CRM Background] Error in async handleIncomingMessage:', err);
+      });
+      return { success: true, acknowledged: true };
 
     case 'CHECK_WHATSAPP_CONNECTION':
       const tabs = await chrome.tabs.query({ url: 'https://web.whatsapp.com/*' });
