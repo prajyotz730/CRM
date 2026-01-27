@@ -789,22 +789,26 @@ async function triggerAutoReply(rule, phoneNumber) {
     }
 
     console.log('[WhatsApp CRM Background] Chat ready, sending TYPE_AND_SEND');
-    const result = await chrome.tabs.sendMessage(tab.id, {
-      type: 'TYPE_AND_SEND',
-      payload: {
-        phone: sanitizedPhone,
-        message: response,
-        attachments: [],
-        queueItemId: `auto-reply-${Date.now()}`,
-      },
-      timestamp: Date.now(),
-      id: crypto.randomUUID(),
-    });
+    try {
+      const result = await chrome.tabs.sendMessage(tab.id, {
+        type: 'TYPE_AND_SEND',
+        payload: {
+          phone: sanitizedPhone,
+          message: response,
+          attachments: [],
+          queueItemId: `auto-reply-${Date.now()}`,
+        },
+        timestamp: Date.now(),
+        id: crypto.randomUUID(),
+      });
 
-    if (result && result.success) {
-      console.log('[WhatsApp CRM Background] Auto-reply sent successfully:', rule.name);
-    } else {
-      console.error('[WhatsApp CRM Background] Auto-reply failed:', result?.error);
+      if (result && result.success) {
+        console.log('[WhatsApp CRM Background] Auto-reply sent successfully:', rule.name);
+      } else {
+        console.error('[WhatsApp CRM Background] Auto-reply failed:', result?.error);
+      }
+    } catch (sendError) {
+      console.log('[WhatsApp CRM Background] TYPE_AND_SEND error (may still have sent):', sendError.message);
     }
     
     try {
@@ -818,7 +822,7 @@ async function triggerAutoReply(rule, phoneNumber) {
       console.log('[WhatsApp CRM Background] Could not reset processing flag');
     }
   } catch (error) {
-    console.error('[WhatsApp CRM Background] Error triggering auto-reply:', error);
+    console.error('[WhatsApp CRM Background] Error in triggerAutoReply:', error.message);
   }
 }
 
