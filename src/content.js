@@ -1,4 +1,9 @@
-console.log('WhatsApp CRM content script loaded');
+if (window.self !== window.top) {
+  console.log('[WhatsApp CRM] Skipping - running in iframe, not main window');
+  throw new Error('Content script should only run in main window');
+}
+
+console.log('[WhatsApp CRM] Content script loaded in main window');
 
 const SELECTORS = {
   SEARCH_BOX: 'div[contenteditable="true"][data-tab="3"]',
@@ -595,6 +600,18 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function debounce(func, wait) {
+  let timeout;
+  return function executedFunction(...args) {
+    const later = () => {
+      clearTimeout(timeout);
+      func(...args);
+    };
+    clearTimeout(timeout);
+    timeout = setTimeout(later, wait);
+  };
+}
+
 const MESSAGE_SELECTORS = {
   INCOMING_MESSAGE: [
     'div.message-in',
@@ -638,6 +655,10 @@ function captureExistingMessageIds() {
   return existingIds;
 }
 
+let pendingMessageNodes = new Set();
+let debounceTimer = null;
+const DEBOUNCE_MS = 500;
+
 function setupIncomingMessageObserver() {
   console.log('[WhatsApp CRM] Setting up real-time message listener (ignoring chat history)');
   
@@ -650,23 +671,50 @@ function setupIncomingMessageObserver() {
     console.log('[WhatsApp CRM] Will ignore', processedMessageIds.size, 'existing messages');
   }, INITIALIZATION_DELAY);
   
+  const processPendingMessages = () => {
+    if (pendingMessageNodes.size === 0) return;
+    
+    const nodesToProcess = Array.from(pendingMessageNodes);
+    pendingMessageNodes.clear();
+    
+    for (const node of nodesToProcess) {
+      if (document.contains(node)) {
+        checkForNewIncomingMessage(node);
+      }
+    }
+  };
+  
+  const debouncedProcess = () => {
+    if (debounceTimer) {
+      clearTimeout(debounceTimer);
+    }
+    debounceTimer = setTimeout(processPendingMessages, DEBOUNCE_MS);
+  };
+  
   const observer = new MutationObserver((mutations) => {
-    if (!isInitialized) {
+    if (!isInitialized || isProcessingAutoReply) {
       return;
     }
     
-    if (isProcessingAutoReply) {
-      return;
-    }
+    let hasNewMessageNodes = false;
     
     for (const mutation of mutations) {
       if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
         for (const node of mutation.addedNodes) {
           if (node.nodeType === Node.ELEMENT_NODE) {
-            checkForNewIncomingMessage(node);
+            const isMessageIn = node.classList?.contains('message-in') || 
+                               (node.querySelector && node.querySelector('.message-in'));
+            if (isMessageIn) {
+              pendingMessageNodes.add(node);
+              hasNewMessageNodes = true;
+            }
           }
         }
       }
+    }
+    
+    if (hasNewMessageNodes) {
+      debouncedProcess();
     }
   });
 
@@ -677,7 +725,7 @@ function setupIncomingMessageObserver() {
     attributes: false,
   });
   
-  console.log('[WhatsApp CRM] Real-time message observer active');
+  console.log('[WhatsApp CRM] Real-time message observer active with debounce');
   return observer;
 }
 
