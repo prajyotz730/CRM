@@ -50,6 +50,7 @@ async function handleMessage(message) {
       console.log('[WhatsApp CRM] Auto-reply processing set to:', isProcessingAutoReply);
       if (!isProcessingAutoReply) {
         isInitialized = false;
+        processedMessageIds = captureExistingMessageIds();
         setTimeout(() => {
           isInitialized = true;
           console.log('[WhatsApp CRM] Re-initialized after auto-reply complete');
@@ -57,8 +58,8 @@ async function handleMessage(message) {
       }
       return { success: true };
     case 'RESET_MESSAGE_LISTENER':
-      lastProcessedMessageId = null;
       isInitialized = false;
+      processedMessageIds = captureExistingMessageIds();
       setTimeout(() => {
         isInitialized = true;
         console.log('[WhatsApp CRM] Message listener reset and re-initialized');
@@ -198,14 +199,93 @@ async function sendMessageWithAttachment(payload) {
 
 async function sendImageAsMedia(attachment) {
   try {
-    const attachButton = await waitForElement(SELECTORS.ATTACHMENT_BUTTON, 5000);
-    if (!attachButton) throw new Error('Attachment button not found');
+    console.log('[WhatsApp CRM] Starting image attachment flow...');
     
-    attachButton.click();
-    await sleep(500);
-
-    const imageInput = document.querySelector(SELECTORS.IMAGE_INPUT);
-    if (!imageInput) throw new Error('Image input not found');
+    const attachButtonSelectors = [
+      'div[title="Attach"]',
+      'button[aria-label="Attach"]',
+      'span[data-icon="attach-menu-plus"]',
+      'span[data-icon="clip"]',
+      'div[aria-label="Attach"]',
+      '[data-testid="attach-menu-plus"]',
+      '[data-testid="clip"]',
+    ];
+    
+    let attachButton = null;
+    for (const selector of attachButtonSelectors) {
+      attachButton = document.querySelector(selector);
+      if (attachButton) {
+        console.log('[WhatsApp CRM] Found attach button with selector:', selector);
+        break;
+      }
+    }
+    
+    if (!attachButton) {
+      attachButton = await waitForElement(attachButtonSelectors.join(', '), 5000);
+    }
+    
+    if (!attachButton) {
+      throw new Error('Attachment button not found');
+    }
+    
+    const clickTarget = attachButton.closest('div[role="button"]') || attachButton.closest('button') || attachButton;
+    clickTarget.click();
+    console.log('[WhatsApp CRM] Clicked attach button');
+    await sleep(800);
+    
+    const imageInputSelectors = [
+      'input[accept="image/*,video/mp4,video/3gpp,video/quicktime"]',
+      'input[accept*="image/*"]',
+      'input[type="file"][accept*="image"]',
+      'input[type="file"]',
+    ];
+    
+    let imageInput = null;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      for (const selector of imageInputSelectors) {
+        const inputs = document.querySelectorAll(selector);
+        for (const input of inputs) {
+          if (input.accept && input.accept.includes('image')) {
+            imageInput = input;
+            console.log('[WhatsApp CRM] Found image input with selector:', selector);
+            break;
+          }
+        }
+        if (imageInput) break;
+      }
+      if (imageInput) break;
+      
+      console.log('[WhatsApp CRM] Image input not found, attempt', attempt + 1);
+      await sleep(500);
+    }
+    
+    if (!imageInput) {
+      const photosOptionSelectors = [
+        'button[aria-label="Photos & videos"]',
+        'li[data-animate-dropdown-item="true"]:first-child',
+        'span[data-icon="image"]',
+        '[data-testid="mi-attach-media"]',
+      ];
+      
+      for (const selector of photosOptionSelectors) {
+        const option = document.querySelector(selector);
+        if (option) {
+          console.log('[WhatsApp CRM] Clicking photos option:', selector);
+          option.click();
+          await sleep(500);
+          break;
+        }
+      }
+      
+      for (const selector of imageInputSelectors) {
+        imageInput = document.querySelector(selector);
+        if (imageInput) break;
+      }
+    }
+    
+    if (!imageInput) {
+      throw new Error('Image input not found after multiple attempts');
+    }
 
     const blob = base64ToBlob(attachment.data);
     const file = new File([blob], attachment.filename || 'image.jpg', { type: blob.type });
@@ -215,30 +295,117 @@ async function sendImageAsMedia(attachment) {
 
     const changeEvent = new Event('change', { bubbles: true });
     imageInput.dispatchEvent(changeEvent);
+    console.log('[WhatsApp CRM] Dispatched change event with image file');
 
-    await sleep(2000);
+    await sleep(2500);
 
-    const sendBtn = await waitForElement(SELECTORS.SEND_ATTACHMENT_BUTTON, 10000);
+    const sendButtonSelectors = [
+      'span[data-icon="send"]',
+      'div[aria-label="Send"]',
+      'button[aria-label="Send"]',
+      '[data-testid="send"]',
+      'div[role="button"] span[data-icon="send"]',
+    ];
+    
+    let sendBtn = null;
+    for (let attempt = 0; attempt < 10; attempt++) {
+      for (const selector of sendButtonSelectors) {
+        sendBtn = document.querySelector(selector);
+        if (sendBtn) {
+          console.log('[WhatsApp CRM] Found send button with selector:', selector);
+          break;
+        }
+      }
+      if (sendBtn) break;
+      await sleep(500);
+    }
+    
     if (sendBtn) {
-      sendBtn.click();
-      await sleep(1500);
+      const sendClickTarget = sendBtn.closest('div[role="button"]') || sendBtn.closest('button') || sendBtn;
+      sendClickTarget.click();
+      console.log('[WhatsApp CRM] Clicked send button for attachment');
+      await sleep(2000);
+    } else {
+      console.error('[WhatsApp CRM] Send button not found for attachment');
     }
   } catch (error) {
-    console.error('Error sending image as media:', error);
+    console.error('[WhatsApp CRM] Error sending image as media:', error);
     throw error;
   }
 }
 
 async function sendDocument(attachment) {
   try {
-    const attachButton = await waitForElement(SELECTORS.ATTACHMENT_BUTTON, 5000);
-    if (!attachButton) throw new Error('Attachment button not found');
+    console.log('[WhatsApp CRM] Starting document attachment flow...');
     
-    attachButton.click();
-    await sleep(500);
-
-    const docInput = document.querySelector(SELECTORS.DOCUMENT_INPUT);
-    if (!docInput) throw new Error('Document input not found');
+    const attachButtonSelectors = [
+      'div[title="Attach"]',
+      'button[aria-label="Attach"]',
+      'span[data-icon="attach-menu-plus"]',
+      'span[data-icon="clip"]',
+      'div[aria-label="Attach"]',
+      '[data-testid="attach-menu-plus"]',
+      '[data-testid="clip"]',
+    ];
+    
+    let attachButton = null;
+    for (const selector of attachButtonSelectors) {
+      attachButton = document.querySelector(selector);
+      if (attachButton) break;
+    }
+    
+    if (!attachButton) {
+      attachButton = await waitForElement(attachButtonSelectors.join(', '), 5000);
+    }
+    
+    if (!attachButton) {
+      throw new Error('Attachment button not found');
+    }
+    
+    const clickTarget = attachButton.closest('div[role="button"]') || attachButton.closest('button') || attachButton;
+    clickTarget.click();
+    console.log('[WhatsApp CRM] Clicked attach button for document');
+    await sleep(800);
+    
+    const docOptionSelectors = [
+      'button[aria-label="Document"]',
+      'li[data-animate-dropdown-item="true"]:nth-child(2)',
+      'span[data-icon="document"]',
+      '[data-testid="mi-attach-document"]',
+    ];
+    
+    for (const selector of docOptionSelectors) {
+      const option = document.querySelector(selector);
+      if (option) {
+        console.log('[WhatsApp CRM] Clicking document option:', selector);
+        option.click();
+        await sleep(500);
+        break;
+      }
+    }
+    
+    const docInputSelectors = [
+      'input[accept="*"]',
+      'input[type="file"]:not([accept*="image"])',
+      'input[type="file"]',
+    ];
+    
+    let docInput = null;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      for (const selector of docInputSelectors) {
+        docInput = document.querySelector(selector);
+        if (docInput) {
+          console.log('[WhatsApp CRM] Found document input with selector:', selector);
+          break;
+        }
+      }
+      if (docInput) break;
+      await sleep(500);
+    }
+    
+    if (!docInput) {
+      throw new Error('Document input not found');
+    }
 
     const blob = base64ToBlob(attachment.data);
     const file = new File([blob], attachment.filename || 'document.pdf', { type: blob.type });
@@ -248,16 +415,35 @@ async function sendDocument(attachment) {
 
     const changeEvent = new Event('change', { bubbles: true });
     docInput.dispatchEvent(changeEvent);
+    console.log('[WhatsApp CRM] Dispatched change event with document file');
 
-    await sleep(2000);
+    await sleep(2500);
 
-    const sendBtn = await waitForElement(SELECTORS.SEND_ATTACHMENT_BUTTON, 10000);
+    const sendButtonSelectors = [
+      'span[data-icon="send"]',
+      'div[aria-label="Send"]',
+      'button[aria-label="Send"]',
+      '[data-testid="send"]',
+    ];
+    
+    let sendBtn = null;
+    for (let attempt = 0; attempt < 10; attempt++) {
+      for (const selector of sendButtonSelectors) {
+        sendBtn = document.querySelector(selector);
+        if (sendBtn) break;
+      }
+      if (sendBtn) break;
+      await sleep(500);
+    }
+    
     if (sendBtn) {
-      sendBtn.click();
-      await sleep(1500);
+      const sendClickTarget = sendBtn.closest('div[role="button"]') || sendBtn.closest('button') || sendBtn;
+      sendClickTarget.click();
+      console.log('[WhatsApp CRM] Clicked send button for document');
+      await sleep(2000);
     }
   } catch (error) {
-    console.error('Error sending document:', error);
+    console.error('[WhatsApp CRM] Error sending document:', error);
     throw error;
   }
 }
@@ -429,18 +615,39 @@ const MESSAGE_SELECTORS = {
   ],
 };
 
-let lastProcessedMessageId = null;
+let processedMessageIds = new Set();
 let isProcessingAutoReply = false;
 let isInitialized = false;
-let initializationTime = Date.now();
+let initializationTimestamp = 0;
 const INITIALIZATION_DELAY = 3000;
+const COOLDOWN_MS = 5000;
+let lastProcessedTimestamp = 0;
+
+function captureExistingMessageIds() {
+  const existingIds = new Set();
+  for (const selector of MESSAGE_SELECTORS.INCOMING_MESSAGE) {
+    const messages = document.querySelectorAll(selector);
+    messages.forEach((msg) => {
+      const dataId = msg.getAttribute('data-id') || msg.closest('[data-id]')?.getAttribute('data-id');
+      if (dataId) {
+        existingIds.add(dataId);
+      }
+    });
+  }
+  console.log('[WhatsApp CRM] Captured', existingIds.size, 'existing message IDs to ignore');
+  return existingIds;
+}
 
 function setupIncomingMessageObserver() {
-  console.log('[WhatsApp CRM] Setting up real-time message listener (not history scanner)');
+  console.log('[WhatsApp CRM] Setting up real-time message listener (ignoring chat history)');
+  
+  processedMessageIds = captureExistingMessageIds();
   
   setTimeout(() => {
     isInitialized = true;
+    initializationTimestamp = Date.now();
     console.log('[WhatsApp CRM] Initialization complete - now listening for NEW messages only');
+    console.log('[WhatsApp CRM] Will ignore', processedMessageIds.size, 'existing messages');
   }, INITIALIZATION_DELAY);
   
   const observer = new MutationObserver((mutations) => {
@@ -449,7 +656,6 @@ function setupIncomingMessageObserver() {
     }
     
     if (isProcessingAutoReply) {
-      console.log('[WhatsApp CRM] Skipping - auto-reply in progress');
       return;
     }
     
@@ -481,18 +687,25 @@ function checkForNewIncomingMessage(node) {
       processLatestIncomingMessage(node);
       return;
     }
-    const found = node.querySelectorAll ? node.querySelectorAll(selector) : [];
-    if (found.length > 0) {
-      const latestMessage = found[found.length - 1];
-      processLatestIncomingMessage(latestMessage);
-      return;
+    if (node.querySelectorAll) {
+      const found = node.querySelectorAll(selector);
+      if (found.length > 0) {
+        processLatestIncomingMessage(found[found.length - 1]);
+        return;
+      }
     }
   }
 }
 
 async function processLatestIncomingMessage(msgElement) {
   if (isProcessingAutoReply) {
-    console.log('[WhatsApp CRM] Skipping - auto-reply already in progress');
+    console.log('[WhatsApp CRM] Skipping - auto-reply in progress');
+    return;
+  }
+  
+  const now = Date.now();
+  if (now - lastProcessedTimestamp < COOLDOWN_MS) {
+    console.log('[WhatsApp CRM] Skipping - cooldown active');
     return;
   }
   
@@ -504,7 +717,7 @@ async function processLatestIncomingMessage(msgElement) {
     return;
   }
   
-  if (messageId === lastProcessedMessageId) {
+  if (processedMessageIds.has(messageId)) {
     return;
   }
   
@@ -512,7 +725,6 @@ async function processLatestIncomingMessage(msgElement) {
       msgElement.closest('.message-out') ||
       msgElement.querySelector('[data-icon="msg-check"]') ||
       msgElement.querySelector('[data-icon="msg-dblcheck"]')) {
-    console.log('[WhatsApp CRM] Skipping outgoing message');
     return;
   }
   
@@ -526,30 +738,40 @@ async function processLatestIncomingMessage(msgElement) {
   }
   
   if (!messageText) {
-    console.log('[WhatsApp CRM] No message text found');
     return;
   }
   
-  lastProcessedMessageId = messageId;
+  processedMessageIds.add(messageId);
+  lastProcessedTimestamp = now;
+  
+  if (processedMessageIds.size > 500) {
+    const idsArray = Array.from(processedMessageIds);
+    processedMessageIds = new Set(idsArray.slice(-250));
+  }
   
   console.log('[WhatsApp CRM] === NEW MESSAGE DETECTED ===');
   console.log('[WhatsApp CRM] Message ID:', messageId);
   console.log('[WhatsApp CRM] Message Text:', messageText);
   
-  await sleep(500);
+  await sleep(300);
   
   let phoneNumber = extractPhoneFromMessageElement(msgElement);
   
   if (!phoneNumber || phoneNumber === 'unknown') {
-    console.log('[WhatsApp CRM] Waiting for phone number from chat header...');
+    console.log('[WhatsApp CRM] Waiting for phone number...');
+    await sleep(800);
+    phoneNumber = getCurrentChatPhone();
+  }
+  
+  if (!phoneNumber || phoneNumber === 'unknown') {
+    console.log('[WhatsApp CRM] Retrying phone extraction...');
     await sleep(1000);
     phoneNumber = getCurrentChatPhone();
   }
   
   if (!phoneNumber || phoneNumber === 'unknown') {
-    console.log('[WhatsApp CRM] Still no phone number, trying one more time...');
-    await sleep(1500);
-    phoneNumber = getCurrentChatPhone();
+    console.log('[WhatsApp CRM] Could not get phone number, aborting');
+    return;
   }
   
   console.log('[WhatsApp CRM] Phone Number:', phoneNumber);
@@ -560,10 +782,10 @@ async function processLatestIncomingMessage(msgElement) {
     payload: {
       from: phoneNumber,
       message: messageText,
-      timestamp: Date.now(),
+      timestamp: now,
       messageId: messageId,
     },
-    timestamp: Date.now(),
+    timestamp: now,
     id: crypto.randomUUID(),
   }).then((response) => {
     console.log('[WhatsApp CRM] Background acknowledged:', response);
