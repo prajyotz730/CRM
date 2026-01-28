@@ -292,8 +292,27 @@ async function sendImageAsMedia(attachment) {
       throw new Error('Image input not found after multiple attempts');
     }
 
-    const blob = base64ToBlob(attachment.data);
-    const file = new File([blob], attachment.filename || 'image.jpg', { type: blob.type });
+    const blob = base64ToBlob(attachment.data, true);
+    
+    let filename = attachment.filename || 'image.jpg';
+    let mimeType = blob.type;
+    
+    if (mimeType === 'image/jpeg' || mimeType === 'image/jpg') {
+      if (!filename.toLowerCase().endsWith('.jpg') && !filename.toLowerCase().endsWith('.jpeg')) {
+        filename = filename.replace(/\.[^.]+$/, '') + '.jpg';
+      }
+    } else if (mimeType === 'image/png') {
+      if (!filename.toLowerCase().endsWith('.png')) {
+        filename = filename.replace(/\.[^.]+$/, '') + '.png';
+      }
+    } else {
+      mimeType = 'image/jpeg';
+      filename = filename.replace(/\.[^.]+$/, '') + '.jpg';
+    }
+    
+    console.log('[WhatsApp CRM] Creating image file:', filename, 'MIME:', mimeType);
+    
+    const file = new File([blob], filename, { type: mimeType });
     const dataTransfer = new DataTransfer();
     dataTransfer.items.add(file);
     imageInput.files = dataTransfer.files;
@@ -302,7 +321,18 @@ async function sendImageAsMedia(attachment) {
     imageInput.dispatchEvent(changeEvent);
     console.log('[WhatsApp CRM] Dispatched change event with image file');
 
-    await sleep(2500);
+    await sleep(3000);
+    
+    const stickerButton = document.querySelector('button[aria-label="Sticker"], span[data-icon="sticker"]');
+    if (stickerButton) {
+      console.log('[WhatsApp CRM] Sticker option detected - ensuring we use media send');
+    }
+    
+    const previewContainer = document.querySelector('div[data-testid="media-canvas"], div[data-testid="image-preview"]');
+    if (!previewContainer) {
+      console.log('[WhatsApp CRM] Waiting for preview to load...');
+      await sleep(2000);
+    }
 
     const sendButtonSelectors = [
       'span[data-icon="send"]',
@@ -584,9 +614,18 @@ function sanitizePhone(phone) {
   return phone.replace(/[^\d]/g, '');
 }
 
-function base64ToBlob(dataUrl) {
+function base64ToBlob(dataUrl, forceImageType = false) {
   const parts = dataUrl.split(',');
-  const mimeType = parts[0].match(/:(.*?);/)?.[1] || 'application/octet-stream';
+  let mimeType = parts[0].match(/:(.*?);/)?.[1] || 'application/octet-stream';
+  
+  if (forceImageType && !mimeType.startsWith('image/')) {
+    mimeType = 'image/jpeg';
+  }
+  
+  if (mimeType === 'image/webp' || mimeType === 'image/gif') {
+    mimeType = 'image/jpeg';
+  }
+  
   const base64 = atob(parts[1]);
   let length = base64.length;
   const bytes = new Uint8Array(length);
@@ -629,6 +668,26 @@ const MESSAGE_SELECTORS = {
     'span[data-testid="conversation-info-header-chat-title"]',
     'header span[title]',
     'div[data-testid="conversation-header"] span[title]',
+  ],
+  CHAT_LIST: [
+    '[aria-label="Chat list"]',
+    'div[data-testid="chat-list"]',
+    '#pane-side',
+  ],
+  CHAT_LIST_ITEM: [
+    'div[data-testid="cell-frame-container"]',
+    'div[data-testid="list-item-container"]',
+    'div[role="listitem"]',
+  ],
+  UNREAD_INDICATOR: [
+    'span[data-testid="icon-unread-count"]',
+    'span[aria-label*="unread"]',
+    'div[data-testid="unread-count"]',
+  ],
+  CHAT_PREVIEW_TEXT: [
+    'span[data-testid="last-msg-status"]',
+    'span[title][dir="ltr"]',
+    'div[data-testid="cell-frame-secondary"] span',
   ],
 };
 
@@ -1013,6 +1072,174 @@ function getCurrentChatPhone() {
 }
 
 const incomingMessageObserver = setupIncomingMessageObserver();
+
+let processedSidebarMessages = new Set();
+let sidebarDebounceTimer = null;
+const SIDEBAR_DEBOUNCE_MS = 1000;
+
+function setupSidebarObserver() {
+  console.log('[WhatsApp CRM] Setting up sidebar observer for background auto-reply');
+  
+  let chatListContainer = null;
+  for (const selector of MESSAGE_SELECTORS.CHAT_LIST) {
+    chatListContainer = document.querySelector(selector);
+    if (chatListContainer) {
+      console.log('[WhatsApp CRM] Found chat list container:', selector);
+      break;
+    }
+  }
+  
+  if (!chatListContainer) {
+    chatListContainer = document.querySelector('#pane-side') || document.body;
+    console.log('[WhatsApp CRM] Using fallback container for sidebar observer');
+  }
+  
+  const processSidebarChanges = () => {
+    if (isProcessingAutoReply) return;
+    
+    for (const itemSelector of MESSAGE_SELECTORS.CHAT_LIST_ITEM) {
+      const chatItems = document.querySelectorAll(itemSelector);
+      
+      for (const item of chatItems) {
+        let hasUnread = false;
+        for (const unreadSelector of MESSAGE_SELECTORS.UNREAD_INDICATOR) {
+          if (item.querySelector(unreadSelector)) {
+            hasUnread = true;
+            break;
+          }
+        }
+        
+        if (!hasUnread) continue;
+        
+        let previewText = null;
+        const secondaryContainer = item.querySelector('div[data-testid="cell-frame-secondary"]');
+        if (secondaryContainer) {
+          const spans = secondaryContainer.querySelectorAll('span');
+          for (const span of spans) {
+            const text = span.textContent?.trim();
+            if (text && text.length > 0 && !text.match(/^\d+:\d+/) && !text.includes('typing')) {
+              previewText = text;
+              break;
+            }
+          }
+        }
+        
+        if (!previewText) {
+          for (const previewSelector of MESSAGE_SELECTORS.CHAT_PREVIEW_TEXT) {
+            const previewEl = item.querySelector(previewSelector);
+            if (previewEl && previewEl.textContent) {
+              previewText = previewEl.textContent.trim();
+              break;
+            }
+          }
+        }
+        
+        if (!previewText) continue;
+        
+        let phoneNumber = null;
+        const dataId = item.getAttribute('data-id');
+        if (dataId) {
+          const phoneMatch = dataId.match(/(\d{10,15})@/);
+          if (phoneMatch) {
+            phoneNumber = phoneMatch[1];
+          }
+        }
+        
+        if (!phoneNumber) {
+          const titleSpan = item.querySelector('span[title]');
+          if (titleSpan) {
+            const title = titleSpan.getAttribute('title');
+            const cleanedTitle = title?.replace(/[^\d]/g, '');
+            if (cleanedTitle && cleanedTitle.length >= 10 && cleanedTitle.length <= 15) {
+              phoneNumber = cleanedTitle;
+            }
+          }
+        }
+        
+        if (!phoneNumber) continue;
+        
+        const sidebarMsgId = `sidebar_${phoneNumber}_${previewText.substring(0, 50)}`;
+        
+        if (processedSidebarMessages.has(sidebarMsgId) || processedMessageIds.has(sidebarMsgId)) {
+          continue;
+        }
+        
+        processedSidebarMessages.add(sidebarMsgId);
+        processedMessageIds.add(sidebarMsgId);
+        
+        if (processedSidebarMessages.size > 200) {
+          const arr = Array.from(processedSidebarMessages);
+          processedSidebarMessages = new Set(arr.slice(-100));
+        }
+        
+        console.log('[WhatsApp CRM] === SIDEBAR MESSAGE DETECTED ===');
+        console.log('[WhatsApp CRM] Phone:', phoneNumber);
+        console.log('[WhatsApp CRM] Preview:', previewText);
+        
+        chrome.runtime.sendMessage({
+          type: 'INCOMING_MESSAGE',
+          payload: {
+            from: phoneNumber,
+            message: previewText,
+            timestamp: Date.now(),
+            messageId: sidebarMsgId,
+            source: 'sidebar',
+          },
+          timestamp: Date.now(),
+          id: crypto.randomUUID(),
+        }).then((response) => {
+          console.log('[WhatsApp CRM] Background acknowledged sidebar message:', response);
+        }).catch((error) => {
+          console.error('[WhatsApp CRM] Error sending sidebar message to background:', error);
+        });
+        
+        return;
+      }
+    }
+  };
+  
+  const debouncedSidebarProcess = () => {
+    if (sidebarDebounceTimer) {
+      clearTimeout(sidebarDebounceTimer);
+    }
+    sidebarDebounceTimer = setTimeout(processSidebarChanges, SIDEBAR_DEBOUNCE_MS);
+  };
+  
+  const sidebarObserver = new MutationObserver((mutations) => {
+    if (!isInitialized || isProcessingAutoReply) return;
+    
+    let hasRelevantChange = false;
+    for (const mutation of mutations) {
+      if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
+        hasRelevantChange = true;
+        break;
+      }
+      if (mutation.type === 'attributes' && 
+          (mutation.attributeName === 'class' || mutation.attributeName === 'data-testid')) {
+        hasRelevantChange = true;
+        break;
+      }
+    }
+    
+    if (hasRelevantChange) {
+      debouncedSidebarProcess();
+    }
+  });
+  
+  sidebarObserver.observe(chatListContainer, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['class', 'data-testid'],
+  });
+  
+  console.log('[WhatsApp CRM] Sidebar observer active');
+  return sidebarObserver;
+}
+
+setTimeout(() => {
+  setupSidebarObserver();
+}, 5000);
 
 const sentMessageObserver = new MutationObserver((mutations) => {
   for (const mutation of mutations) {
