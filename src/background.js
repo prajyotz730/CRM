@@ -436,12 +436,16 @@ class CampaignManager {
 
       const settings = await storage.getSettings();
       if (settings.notifications.enabled && settings.notifications.desktop) {
-        chrome.notifications.create({
-          type: 'basic',
-          iconUrl: 'icon48.svg',
-          title: 'Campaign Completed',
-          message: `${campaign.name} completed. Sent: ${campaign.progress.sent}, Failed: ${campaign.progress.failed}`,
-        });
+        try {
+          chrome.notifications.create({
+            type: 'basic',
+            iconUrl: chrome.runtime.getURL('icon48.svg'),
+            title: 'Campaign Completed',
+            message: `${campaign.name} completed. Sent: ${campaign.progress.sent}, Failed: ${campaign.progress.failed}`,
+          });
+        } catch (notifError) {
+          console.log('[WhatsApp CRM Background] Notification error (non-critical):', notifError.message);
+        }
       }
     }
 

@@ -440,14 +440,21 @@ async function sendImageAsMedia(attachment) {
       'div[aria-label="Send"]',
       'button[aria-label="Send"]',
       'div[role="button"] span[data-icon="send"]',
+      'span[data-icon="send-light"]',
+      'span[data-icon="send-filled"]',
+      '[data-testid="compose-btn-send"]',
+      '[data-testid="media-send"]',
+      'button[type="submit"]',
     ];
     
     let sendBtn = null;
-    for (let attempt = 0; attempt < 12; attempt++) {
+    for (let attempt = 0; attempt < 15; attempt++) {
       for (const selector of sendButtonSelectors) {
         const buttons = document.querySelectorAll(selector);
         for (const btn of buttons) {
-          if (btn.offsetParent !== null || btn.closest('div[role="button"]')) {
+          const isVisible = btn.offsetParent !== null;
+          const hasParentButton = btn.closest('div[role="button"]') || btn.closest('button');
+          if (isVisible || hasParentButton) {
             sendBtn = btn;
             console.log('[WhatsApp CRM] Found send button with selector:', selector);
             break;
@@ -456,7 +463,34 @@ async function sendImageAsMedia(attachment) {
         if (sendBtn) break;
       }
       if (sendBtn) break;
-      await sleep(400);
+      
+      if (attempt === 7) {
+        console.log('[WhatsApp CRM] Send button not found yet, scanning all buttons...');
+        const allButtons = document.querySelectorAll('div[role="button"], button, span[data-icon]');
+        allButtons.forEach((btn, idx) => {
+          const dataIcon = btn.getAttribute('data-icon');
+          const ariaLabel = btn.getAttribute('aria-label');
+          const testId = btn.getAttribute('data-testid');
+          if (dataIcon || ariaLabel || testId) {
+            console.log(`[WhatsApp CRM] Button ${idx}: data-icon=${dataIcon}, aria-label=${ariaLabel}, data-testid=${testId}`);
+          }
+        });
+      }
+      
+      await sleep(500);
+    }
+    
+    if (!sendBtn) {
+      console.log('[WhatsApp CRM] Trying to find send button by scanning all visible elements...');
+      const allIcons = document.querySelectorAll('span[data-icon]');
+      for (const icon of allIcons) {
+        const dataIcon = icon.getAttribute('data-icon');
+        if (dataIcon && dataIcon.toLowerCase().includes('send')) {
+          sendBtn = icon;
+          console.log('[WhatsApp CRM] Found send button via icon scan:', dataIcon);
+          break;
+        }
+      }
     }
     
     if (sendBtn) {
@@ -465,7 +499,9 @@ async function sendImageAsMedia(attachment) {
       console.log('[WhatsApp CRM] Clicked send button for image attachment');
       await sleep(2500);
     } else {
-      console.error('[WhatsApp CRM] Send button not found for attachment');
+      console.error('[WhatsApp CRM] Send button not found for attachment. Available icons:');
+      const allIcons = document.querySelectorAll('span[data-icon]');
+      allIcons.forEach(icon => console.log('[WhatsApp CRM] Icon:', icon.getAttribute('data-icon')));
       throw new Error('Send button not found for image attachment');
     }
     
