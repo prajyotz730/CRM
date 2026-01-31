@@ -204,7 +204,7 @@ async function sendMessageWithAttachment(payload) {
 
 async function sendImageAsMedia(attachment) {
   try {
-    console.log('[WhatsApp CRM] Starting image attachment flow...');
+    console.log('[WhatsApp CRM] Starting image attachment flow (as media, not sticker)...');
     
     const attachButtonSelectors = [
       'span[data-icon="plus"]',
@@ -217,10 +217,9 @@ async function sendImageAsMedia(attachment) {
       '[data-testid="clip"]',
       '[data-testid="conversation-clip"]',
       'footer button[aria-label*="ttach"]',
-      'footer span[data-icon]',
     ];
     
-    console.log('[WhatsApp CRM] Looking for attach button...');
+    console.log('[WhatsApp CRM] Step 1: Looking for attach button...');
     
     let attachButton = null;
     for (const selector of attachButtonSelectors) {
@@ -277,8 +276,48 @@ async function sendImageAsMedia(attachment) {
     const clickTarget = attachButton.closest('div[role="button"]') || attachButton.closest('button') || attachButton;
     clickTarget.click();
     console.log('[WhatsApp CRM] Clicked attach button');
-    await sleep(1000);
+    await sleep(1200);
     
+    console.log('[WhatsApp CRM] Step 2: Clicking Photos & videos option...');
+    const photosOptionSelectors = [
+      '[data-testid="mi-attach-media"]',
+      'button[aria-label="Photos & videos"]',
+      'span[data-icon="image"]',
+      'span[data-icon="gallery"]',
+      'li[data-animate-dropdown-item="true"]:first-child',
+      'div[role="button"][aria-label*="hoto"]',
+    ];
+    
+    let photosOption = null;
+    for (const selector of photosOptionSelectors) {
+      photosOption = document.querySelector(selector);
+      if (photosOption) {
+        console.log('[WhatsApp CRM] Found photos option with selector:', selector);
+        const optionClickTarget = photosOption.closest('div[role="button"]') || photosOption.closest('button') || photosOption.closest('li') || photosOption;
+        optionClickTarget.click();
+        console.log('[WhatsApp CRM] Clicked photos option');
+        await sleep(800);
+        break;
+      }
+    }
+    
+    if (!photosOption) {
+      console.log('[WhatsApp CRM] Photos option not found, looking for menu items...');
+      const menuItems = document.querySelectorAll('li, div[role="button"], button');
+      for (const item of menuItems) {
+        const text = item.textContent?.toLowerCase() || '';
+        const ariaLabel = item.getAttribute('aria-label')?.toLowerCase() || '';
+        if (text.includes('photo') || text.includes('image') || text.includes('media') ||
+            ariaLabel.includes('photo') || ariaLabel.includes('image') || ariaLabel.includes('media')) {
+          console.log('[WhatsApp CRM] Found photos option via text search');
+          item.click();
+          await sleep(800);
+          break;
+        }
+      }
+    }
+    
+    console.log('[WhatsApp CRM] Step 3: Finding image input...');
     const imageInputSelectors = [
       'input[accept="image/*,video/mp4,video/3gpp,video/quicktime"]',
       'input[accept*="image/*"]',
@@ -287,13 +326,13 @@ async function sendImageAsMedia(attachment) {
     ];
     
     let imageInput = null;
-    for (let attempt = 0; attempt < 5; attempt++) {
+    for (let attempt = 0; attempt < 8; attempt++) {
       for (const selector of imageInputSelectors) {
         const inputs = document.querySelectorAll(selector);
         for (const input of inputs) {
           if (input.accept && input.accept.includes('image')) {
             imageInput = input;
-            console.log('[WhatsApp CRM] Found image input with selector:', selector);
+            console.log('[WhatsApp CRM] Found image input with selector:', selector, 'accept:', input.accept);
             break;
           }
         }
@@ -306,26 +345,12 @@ async function sendImageAsMedia(attachment) {
     }
     
     if (!imageInput) {
-      const photosOptionSelectors = [
-        'button[aria-label="Photos & videos"]',
-        'li[data-animate-dropdown-item="true"]:first-child',
-        'span[data-icon="image"]',
-        '[data-testid="mi-attach-media"]',
-      ];
-      
-      for (const selector of photosOptionSelectors) {
-        const option = document.querySelector(selector);
-        if (option) {
-          console.log('[WhatsApp CRM] Clicking photos option:', selector);
-          option.click();
-          await sleep(500);
-          break;
+      const allInputs = document.querySelectorAll('input[type="file"]');
+      for (const input of allInputs) {
+        console.log('[WhatsApp CRM] Found file input:', input.accept);
+        if (!imageInput) {
+          imageInput = input;
         }
-      }
-      
-      for (const selector of imageInputSelectors) {
-        imageInput = document.querySelector(selector);
-        if (imageInput) break;
       }
     }
     
@@ -333,77 +358,118 @@ async function sendImageAsMedia(attachment) {
       throw new Error('Image input not found after multiple attempts');
     }
 
+    console.log('[WhatsApp CRM] Step 4: Creating and uploading image file...');
     const blob = base64ToBlob(attachment.data, true);
     
-    let filename = attachment.filename || 'image.jpg';
-    let mimeType = blob.type;
+    let filename = attachment.filename || 'photo_' + Date.now() + '.jpg';
+    let mimeType = 'image/jpeg';
     
-    if (mimeType === 'image/jpeg' || mimeType === 'image/jpg') {
-      if (!filename.toLowerCase().endsWith('.jpg') && !filename.toLowerCase().endsWith('.jpeg')) {
-        filename = filename.replace(/\.[^.]+$/, '') + '.jpg';
-      }
-    } else if (mimeType === 'image/png') {
+    if (blob.type === 'image/png') {
+      mimeType = 'image/png';
       if (!filename.toLowerCase().endsWith('.png')) {
         filename = filename.replace(/\.[^.]+$/, '') + '.png';
       }
     } else {
-      mimeType = 'image/jpeg';
-      filename = filename.replace(/\.[^.]+$/, '') + '.jpg';
+      if (!filename.toLowerCase().endsWith('.jpg') && !filename.toLowerCase().endsWith('.jpeg')) {
+        filename = filename.replace(/\.[^.]+$/, '') + '.jpg';
+      }
     }
     
-    console.log('[WhatsApp CRM] Creating image file:', filename, 'MIME:', mimeType);
+    console.log('[WhatsApp CRM] Creating image file:', filename, 'MIME:', mimeType, 'Size:', blob.size, 'bytes');
     
-    const file = new File([blob], filename, { type: mimeType });
+    const file = new File([blob], filename, { type: mimeType, lastModified: Date.now() });
     const dataTransfer = new DataTransfer();
     dataTransfer.items.add(file);
     imageInput.files = dataTransfer.files;
 
+    const inputEvent = new Event('input', { bubbles: true });
+    imageInput.dispatchEvent(inputEvent);
     const changeEvent = new Event('change', { bubbles: true });
     imageInput.dispatchEvent(changeEvent);
-    console.log('[WhatsApp CRM] Dispatched change event with image file');
+    console.log('[WhatsApp CRM] Dispatched input and change events');
 
-    await sleep(3000);
+    console.log('[WhatsApp CRM] Step 5: Waiting for preview to load...');
+    await sleep(3500);
     
-    const stickerButton = document.querySelector('button[aria-label="Sticker"], span[data-icon="sticker"]');
-    if (stickerButton) {
-      console.log('[WhatsApp CRM] Sticker option detected - ensuring we use media send');
+    const previewSelectors = [
+      'div[data-testid="media-canvas"]',
+      'div[data-testid="image-preview"]',
+      'div[data-testid="media-editor"]',
+      'div[class*="media-viewer"]',
+    ];
+    
+    let previewFound = false;
+    for (const selector of previewSelectors) {
+      if (document.querySelector(selector)) {
+        previewFound = true;
+        console.log('[WhatsApp CRM] Preview loaded:', selector);
+        break;
+      }
     }
     
-    const previewContainer = document.querySelector('div[data-testid="media-canvas"], div[data-testid="image-preview"]');
-    if (!previewContainer) {
-      console.log('[WhatsApp CRM] Waiting for preview to load...');
-      await sleep(2000);
+    if (!previewFound) {
+      console.log('[WhatsApp CRM] Preview not detected, waiting longer...');
+      await sleep(2500);
+    }
+    
+    console.log('[WhatsApp CRM] Step 6: Adding caption to ensure media (not sticker) mode...');
+    const captionInputSelectors = [
+      'div[data-testid="media-caption-input-container"] div[contenteditable="true"]',
+      'div[data-testid="media-caption-input"] div[contenteditable="true"]',
+      'div[contenteditable="true"][data-tab="6"]',
+      'div[contenteditable="true"][data-tab="10"]',
+      'footer div[contenteditable="true"]',
+    ];
+    
+    let captionInput = null;
+    for (const selector of captionInputSelectors) {
+      captionInput = document.querySelector(selector);
+      if (captionInput) {
+        console.log('[WhatsApp CRM] Found caption input:', selector);
+        captionInput.focus();
+        document.execCommand('insertText', false, ' ');
+        await sleep(300);
+        break;
+      }
     }
 
+    console.log('[WhatsApp CRM] Step 7: Finding and clicking send button...');
     const sendButtonSelectors = [
       'span[data-icon="send"]',
+      '[data-testid="send"]',
       'div[aria-label="Send"]',
       'button[aria-label="Send"]',
-      '[data-testid="send"]',
       'div[role="button"] span[data-icon="send"]',
     ];
     
     let sendBtn = null;
-    for (let attempt = 0; attempt < 10; attempt++) {
+    for (let attempt = 0; attempt < 12; attempt++) {
       for (const selector of sendButtonSelectors) {
-        sendBtn = document.querySelector(selector);
-        if (sendBtn) {
-          console.log('[WhatsApp CRM] Found send button with selector:', selector);
-          break;
+        const buttons = document.querySelectorAll(selector);
+        for (const btn of buttons) {
+          if (btn.offsetParent !== null || btn.closest('div[role="button"]')) {
+            sendBtn = btn;
+            console.log('[WhatsApp CRM] Found send button with selector:', selector);
+            break;
+          }
         }
+        if (sendBtn) break;
       }
       if (sendBtn) break;
-      await sleep(500);
+      await sleep(400);
     }
     
     if (sendBtn) {
       const sendClickTarget = sendBtn.closest('div[role="button"]') || sendBtn.closest('button') || sendBtn;
       sendClickTarget.click();
-      console.log('[WhatsApp CRM] Clicked send button for attachment');
-      await sleep(2000);
+      console.log('[WhatsApp CRM] Clicked send button for image attachment');
+      await sleep(2500);
     } else {
       console.error('[WhatsApp CRM] Send button not found for attachment');
+      throw new Error('Send button not found for image attachment');
     }
+    
+    console.log('[WhatsApp CRM] Image attachment flow completed');
   } catch (error) {
     console.error('[WhatsApp CRM] Error sending image as media:', error);
     throw error;
