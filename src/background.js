@@ -307,17 +307,33 @@ class CampaignManager {
       };
 
       console.log('Sending TYPE_AND_SEND message');
-      const result = await chrome.tabs.sendMessage(tab.id, {
-        type: 'TYPE_AND_SEND',
-        payload: payload,
-        timestamp: Date.now(),
-        id: crypto.randomUUID(),
-      });
+      let messageSent = false;
+      try {
+        const result = await chrome.tabs.sendMessage(tab.id, {
+          type: 'TYPE_AND_SEND',
+          payload: payload,
+          timestamp: Date.now(),
+          id: crypto.randomUUID(),
+        });
 
-      if (result && result.success) {
+        if (result && result.success) {
+          messageSent = true;
+        } else if (result?.error) {
+          throw new Error(result.error);
+        }
+      } catch (sendError) {
+        if (sendError.message && sendError.message.includes('message channel closed')) {
+          console.log('[WhatsApp CRM Background] Message channel closed - message may have been sent, assuming success');
+          messageSent = true;
+        } else {
+          throw sendError;
+        }
+      }
+
+      if (messageSent) {
         await this.handleMessageSent(item.id);
       } else {
-        throw new Error(result?.error || 'Failed to send message');
+        throw new Error('Failed to send message');
       }
 
       const delay = this.getRandomDelay(settings.sending.minDelay, settings.sending.maxDelay);
@@ -422,7 +438,7 @@ class CampaignManager {
       if (settings.notifications.enabled && settings.notifications.desktop) {
         chrome.notifications.create({
           type: 'basic',
-          iconUrl: 'icon48.png',
+          iconUrl: 'icon48.svg',
           title: 'Campaign Completed',
           message: `${campaign.name} completed. Sent: ${campaign.progress.sent}, Failed: ${campaign.progress.failed}`,
         });
