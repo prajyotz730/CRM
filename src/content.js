@@ -6,22 +6,22 @@ if (window.self !== window.top) {
 console.log('[WhatsApp CRM] Content script loaded in main window');
 
 const SELECTORS = {
-  SEARCH_BOX: 'div[contenteditable="true"][data-tab="3"]',
-  CHAT_SEARCH: 'div[contenteditable="true"][data-tab="3"]',
-  MESSAGE_BOX: 'div[contenteditable="true"][data-tab="10"]',
-  SEND_BUTTON: 'button[aria-label="Send"], span[data-icon="send"]',
+  SEARCH_BOX: 'div[contenteditable="true"][data-tab="3"], div[contenteditable="true"][role="textbox"]',
+  CHAT_SEARCH: 'div[contenteditable="true"][data-tab="3"], div[contenteditable="true"][role="textbox"]',
+  MESSAGE_BOX: 'div[contenteditable="true"][data-tab="10"], div[contenteditable="true"][data-tab="6"], footer div[contenteditable="true"], div[data-testid="conversation-compose-box-input"]',
+  SEND_BUTTON: 'button[aria-label="Send"], span[data-icon="send"], button[data-testid="send"], div[data-testid="send"]',
   CHAT_HEADER: 'header',
-  ATTACHMENT_BUTTON: 'div[title="Attach"], button[aria-label="Attach"], span[data-icon="attach-menu-plus"], span[data-icon="clip"]',
-  ATTACHMENT_MENU: 'div[data-animate-modal-popup="true"], ul[role="menu"]',
-  PHOTOS_VIDEOS_OPTION: 'button[aria-label="Photos & videos"], li[data-animate-dropdown-item="true"]:first-child, input[accept="image/*,video/mp4,video/3gpp,video/quicktime"]',
-  DOCUMENT_OPTION: 'button[aria-label="Document"], li[data-animate-dropdown-item="true"]:nth-child(2)',
-  IMAGE_INPUT: 'input[accept="image/*,video/mp4,video/3gpp,video/quicktime"]',
-  DOCUMENT_INPUT: 'input[accept="*"]',
-  SEND_ATTACHMENT_BUTTON: 'span[data-icon="send"], div[aria-label="Send"]',
+  ATTACHMENT_BUTTON: 'div[title="Attach"], button[aria-label="Attach"], span[data-icon="attach-menu-plus"], span[data-icon="clip"], span[data-icon="plus"], div[data-testid="attach-menu-plus"], button[data-testid="clip"]',
+  ATTACHMENT_MENU: 'div[data-animate-modal-popup="true"], ul[role="menu"], div[data-testid="attach-menu"]',
+  PHOTOS_VIDEOS_OPTION: 'button[aria-label="Photos & videos"], li[data-animate-dropdown-item="true"]:first-child, input[accept="image/*,video/mp4,video/3gpp,video/quicktime"], span[data-icon="image"], div[data-testid="mi-attach-media"]',
+  DOCUMENT_OPTION: 'button[aria-label="Document"], li[data-animate-dropdown-item="true"]:nth-child(2), span[data-icon="document"], div[data-testid="mi-attach-document"]',
+  IMAGE_INPUT: 'input[accept="image/*,video/mp4,video/3gpp,video/quicktime"], input[accept*="image"]',
+  DOCUMENT_INPUT: 'input[accept="*"], input[type="file"]',
+  SEND_ATTACHMENT_BUTTON: 'span[data-icon="send"], div[aria-label="Send"], button[data-testid="send"]',
   MESSAGE_STATUS_SENT: 'span[data-icon="msg-check"], span[data-icon="msg-dblcheck"]',
   MESSAGE_STATUS_DELIVERED: 'span[data-icon="msg-dblcheck"]',
   MESSAGE_STATUS_READ: 'span[data-icon="msg-dblcheck-ack"]',
-  CHAT_LIST_ITEM: 'div[data-testid="cell-frame-container"]',
+  CHAT_LIST_ITEM: 'div[data-testid="cell-frame-container"], div[data-testid="list-item-container"]',
   CONTACT_NAME: 'span[data-testid="conversation-info-header-chat-title"]',
 };
 
@@ -207,36 +207,77 @@ async function sendImageAsMedia(attachment) {
     console.log('[WhatsApp CRM] Starting image attachment flow...');
     
     const attachButtonSelectors = [
-      'div[title="Attach"]',
-      'button[aria-label="Attach"]',
+      'span[data-icon="plus"]',
       'span[data-icon="attach-menu-plus"]',
       'span[data-icon="clip"]',
+      'div[title="Attach"]',
+      'button[aria-label="Attach"]',
       'div[aria-label="Attach"]',
       '[data-testid="attach-menu-plus"]',
       '[data-testid="clip"]',
+      '[data-testid="conversation-clip"]',
+      'footer button[aria-label*="ttach"]',
+      'footer span[data-icon]',
     ];
+    
+    console.log('[WhatsApp CRM] Looking for attach button...');
     
     let attachButton = null;
     for (const selector of attachButtonSelectors) {
-      attachButton = document.querySelector(selector);
-      if (attachButton) {
-        console.log('[WhatsApp CRM] Found attach button with selector:', selector);
-        break;
+      const elements = document.querySelectorAll(selector);
+      for (const el of elements) {
+        const isInFooter = el.closest('footer') !== null;
+        const isVisible = el.offsetParent !== null;
+        if (isVisible || isInFooter) {
+          attachButton = el;
+          console.log('[WhatsApp CRM] Found attach button with selector:', selector);
+          break;
+        }
+      }
+      if (attachButton) break;
+    }
+    
+    if (!attachButton) {
+      const footer = document.querySelector('footer');
+      if (footer) {
+        const buttons = footer.querySelectorAll('button, div[role="button"], span[data-icon]');
+        for (const btn of buttons) {
+          const icon = btn.querySelector('span[data-icon]') || btn;
+          const dataIcon = icon.getAttribute('data-icon');
+          if (dataIcon && (dataIcon.includes('plus') || dataIcon.includes('clip') || dataIcon.includes('attach'))) {
+            attachButton = btn;
+            console.log('[WhatsApp CRM] Found attach button via footer scan, data-icon:', dataIcon);
+            break;
+          }
+        }
       }
     }
     
     if (!attachButton) {
-      attachButton = await waitForElement(attachButtonSelectors.join(', '), 5000);
+      await sleep(2000);
+      for (const selector of attachButtonSelectors) {
+        attachButton = document.querySelector(selector);
+        if (attachButton) {
+          console.log('[WhatsApp CRM] Found attach button after wait:', selector);
+          break;
+        }
+      }
     }
     
     if (!attachButton) {
+      console.error('[WhatsApp CRM] Attach button not found. Available elements in footer:');
+      const footer = document.querySelector('footer');
+      if (footer) {
+        const allIcons = footer.querySelectorAll('span[data-icon]');
+        allIcons.forEach(icon => console.log('[WhatsApp CRM] Icon found:', icon.getAttribute('data-icon')));
+      }
       throw new Error('Attachment button not found');
     }
     
     const clickTarget = attachButton.closest('div[role="button"]') || attachButton.closest('button') || attachButton;
     clickTarget.click();
     console.log('[WhatsApp CRM] Clicked attach button');
-    await sleep(800);
+    await sleep(1000);
     
     const imageInputSelectors = [
       'input[accept="image/*,video/mp4,video/3gpp,video/quicktime"]',
@@ -374,23 +415,61 @@ async function sendDocument(attachment) {
     console.log('[WhatsApp CRM] Starting document attachment flow...');
     
     const attachButtonSelectors = [
-      'div[title="Attach"]',
-      'button[aria-label="Attach"]',
+      'span[data-icon="plus"]',
       'span[data-icon="attach-menu-plus"]',
       'span[data-icon="clip"]',
+      'div[title="Attach"]',
+      'button[aria-label="Attach"]',
       'div[aria-label="Attach"]',
       '[data-testid="attach-menu-plus"]',
       '[data-testid="clip"]',
+      '[data-testid="conversation-clip"]',
+      'footer button[aria-label*="ttach"]',
+      'footer span[data-icon]',
     ];
+    
+    console.log('[WhatsApp CRM] Looking for attach button for document...');
     
     let attachButton = null;
     for (const selector of attachButtonSelectors) {
-      attachButton = document.querySelector(selector);
+      const elements = document.querySelectorAll(selector);
+      for (const el of elements) {
+        const isInFooter = el.closest('footer') !== null;
+        const isVisible = el.offsetParent !== null;
+        if (isVisible || isInFooter) {
+          attachButton = el;
+          console.log('[WhatsApp CRM] Found attach button with selector:', selector);
+          break;
+        }
+      }
       if (attachButton) break;
     }
     
     if (!attachButton) {
-      attachButton = await waitForElement(attachButtonSelectors.join(', '), 5000);
+      const footer = document.querySelector('footer');
+      if (footer) {
+        const buttons = footer.querySelectorAll('button, div[role="button"], span[data-icon]');
+        for (const btn of buttons) {
+          const icon = btn.querySelector('span[data-icon]') || btn;
+          const dataIcon = icon.getAttribute('data-icon');
+          if (dataIcon && (dataIcon.includes('plus') || dataIcon.includes('clip') || dataIcon.includes('attach'))) {
+            attachButton = btn;
+            console.log('[WhatsApp CRM] Found attach button via footer scan, data-icon:', dataIcon);
+            break;
+          }
+        }
+      }
+    }
+    
+    if (!attachButton) {
+      await sleep(2000);
+      for (const selector of attachButtonSelectors) {
+        attachButton = document.querySelector(selector);
+        if (attachButton) {
+          console.log('[WhatsApp CRM] Found attach button after wait:', selector);
+          break;
+        }
+      }
     }
     
     if (!attachButton) {
@@ -400,7 +479,7 @@ async function sendDocument(attachment) {
     const clickTarget = attachButton.closest('div[role="button"]') || attachButton.closest('button') || attachButton;
     clickTarget.click();
     console.log('[WhatsApp CRM] Clicked attach button for document');
-    await sleep(800);
+    await sleep(1000);
     
     const docOptionSelectors = [
       'button[aria-label="Document"]',
@@ -516,22 +595,43 @@ async function typeMessage(message) {
 }
 
 async function clickSendButton() {
+  console.log('[WhatsApp CRM] Looking for send button...');
+  
   const sendButtonSelectors = [
-    'button[aria-label="Send"]',
     'span[data-icon="send"]',
+    'button[aria-label="Send"]',
     'button[data-tab="11"]',
     'div[role="button"][aria-label="Send"]',
     '[data-testid="send"]',
+    '[data-testid="compose-btn-send"]',
+    'footer button[aria-label*="end"]',
     'button.send-button',
   ];
 
   for (const selector of sendButtonSelectors) {
     const button = document.querySelector(selector);
     if (button) {
-      const clickTarget = button.closest('button') || button;
+      console.log('[WhatsApp CRM] Found send button with selector:', selector);
+      const clickTarget = button.closest('button') || button.closest('div[role="button"]') || button;
       clickTarget.click();
       await sleep(500);
       return true;
+    }
+  }
+
+  const footer = document.querySelector('footer');
+  if (footer) {
+    const buttons = footer.querySelectorAll('button, span[data-icon], div[role="button"]');
+    for (const btn of buttons) {
+      const ariaLabel = btn.getAttribute('aria-label') || '';
+      const dataIcon = btn.getAttribute('data-icon') || '';
+      if (ariaLabel.toLowerCase().includes('send') || dataIcon === 'send') {
+        console.log('[WhatsApp CRM] Found send button via footer scan');
+        const clickTarget = btn.closest('button') || btn.closest('div[role="button"]') || btn;
+        clickTarget.click();
+        await sleep(500);
+        return true;
+      }
     }
   }
 
@@ -540,12 +640,14 @@ async function clickSendButton() {
     const ariaLabel = btn.getAttribute('aria-label') || '';
     const dataIcon = btn.getAttribute('data-icon') || '';
     if (ariaLabel.toLowerCase().includes('send') || dataIcon === 'send') {
+      console.log('[WhatsApp CRM] Found send button via global scan');
       btn.click();
       await sleep(500);
       return true;
     }
   }
 
+  console.error('[WhatsApp CRM] Send button not found');
   return false;
 }
 
