@@ -284,7 +284,6 @@ async function sendImageAsMedia(attachment) {
       'button[aria-label="Photos & videos"]',
       'span[data-icon="image"]',
       'span[data-icon="gallery"]',
-      'li[data-animate-dropdown-item="true"]:first-child',
       'div[role="button"][aria-label*="hoto"]',
     ];
     
@@ -358,17 +357,18 @@ async function sendImageAsMedia(attachment) {
       throw new Error('Image input not found after multiple attempts');
     }
 
-    console.log('[WhatsApp CRM] Step 4: Creating and uploading image file...');
-    const blob = base64ToBlob(attachment.data, true);
+    console.log('[WhatsApp CRM] Step 4: Creating and uploading image file with TRUE JPEG conversion...');
+    const originalBlob = base64ToBlob(attachment.data, true);
+    console.log('[WhatsApp CRM] Original blob type:', originalBlob.type, 'size:', originalBlob.size, 'bytes');
+    
+    const jpegBlob = await convertToJpegBlob(originalBlob);
     
     let filename = attachment.filename || 'photo_' + Date.now() + '.jpg';
-    const mimeType = 'image/jpeg';
-    
     filename = filename.replace(/\.[^.]+$/, '') + '.jpg';
     
-    console.log('[WhatsApp CRM] Creating image file as JPEG (forced):', filename, 'MIME:', mimeType, 'Size:', blob.size, 'bytes');
+    console.log('[WhatsApp CRM] Creating JPEG file:', filename, 'MIME: image/jpeg', 'Size:', jpegBlob.size, 'bytes');
     
-    const file = new File([blob], filename, { type: mimeType, lastModified: Date.now() });
+    const file = new File([jpegBlob], filename, { type: 'image/jpeg', lastModified: Date.now() });
     const dataTransfer = new DataTransfer();
     dataTransfer.items.add(file);
     imageInput.files = dataTransfer.files;
@@ -673,8 +673,24 @@ async function sendDocument(attachment) {
       console.log('[WhatsApp CRM] Clicked send button for document');
       await sleep(2000);
     } else {
-      console.error('[WhatsApp CRM] Send button not found for document after', maxAttempts, 'attempts');
-      throw new Error('Send button not found for document attachment');
+      console.log('[WhatsApp CRM] Send button not found, trying Enter key fallback...');
+      const activeElement = document.activeElement;
+      if (activeElement) {
+        const enterEvent = new KeyboardEvent('keydown', {
+          key: 'Enter',
+          code: 'Enter',
+          keyCode: 13,
+          which: 13,
+          bubbles: true,
+          cancelable: true,
+        });
+        activeElement.dispatchEvent(enterEvent);
+        console.log('[WhatsApp CRM] Dispatched Enter key event as fallback');
+        await sleep(2000);
+      } else {
+        console.error('[WhatsApp CRM] Send button not found for document after', maxAttempts, 'attempts and Enter fallback failed');
+        throw new Error('Send button not found for document attachment');
+      }
     }
   } catch (error) {
     console.error('[WhatsApp CRM] Error sending document:', error);
@@ -855,6 +871,52 @@ function base64ToBlob(dataUrl, forceImageType = false) {
     bytes[length] = base64.charCodeAt(length);
   }
   return new Blob([bytes], { type: mimeType });
+}
+
+async function convertToJpegBlob(originalBlob) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(originalBlob);
+    
+    img.onload = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.width;
+        canvas.height = img.height;
+        
+        const ctx = canvas.getContext('2d');
+        
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        ctx.drawImage(img, 0, 0);
+        
+        canvas.toBlob(
+          (jpegBlob) => {
+            URL.revokeObjectURL(url);
+            if (jpegBlob) {
+              console.log('[WhatsApp CRM] Converted image to JPEG:', jpegBlob.size, 'bytes');
+              resolve(jpegBlob);
+            } else {
+              reject(new Error('Failed to convert image to JPEG'));
+            }
+          },
+          'image/jpeg',
+          0.95
+        );
+      } catch (error) {
+        URL.revokeObjectURL(url);
+        reject(error);
+      }
+    };
+    
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('Failed to load image for conversion'));
+    };
+    
+    img.src = url;
+  });
 }
 
 function sleep(ms) {
