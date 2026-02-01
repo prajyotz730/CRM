@@ -358,19 +358,16 @@ async function sendImageAsMedia(attachment) {
     }
 
     console.log('[WhatsApp CRM] Step 4: Creating and uploading image file with TRUE JPEG conversion...');
-    const originalBlob = base64ToBlob(attachment.data, true);
-    console.log('[WhatsApp CRM] Original blob type:', originalBlob.type, 'size:', originalBlob.size, 'bytes');
+    const rawBlob = base64ToBlob(attachment.data, true);
+    console.log('[WhatsApp CRM] Raw blob type:', rawBlob.type, 'size:', rawBlob.size, 'bytes');
     
-    const jpegBlob = await convertToJpegBlob(originalBlob);
+    const jpegBlob = await blobToJpeg(rawBlob);
+    console.log('[WhatsApp CRM] After blobToJpeg - JPEG blob size:', jpegBlob ? jpegBlob.size : 'null', 'bytes');
     
-    let filename = attachment.filename || 'photo_' + Date.now() + '.jpg';
-    filename = filename.replace(/\.[^.]+$/, '') + '.jpg';
-    
-    console.log('[WhatsApp CRM] Creating JPEG file:', filename, 'MIME: image/jpeg', 'Size:', jpegBlob.size, 'bytes');
-    
-    const file = new File([jpegBlob], filename, { type: 'image/jpeg', lastModified: Date.now() });
+    const fileToUpload = new File([jpegBlob], 'image.jpg', { type: 'image/jpeg', lastModified: Date.now() });
+    console.log('[WhatsApp CRM] Created File object:', fileToUpload.name, 'type:', fileToUpload.type, 'size:', fileToUpload.size);
     const dataTransfer = new DataTransfer();
-    dataTransfer.items.add(file);
+    dataTransfer.items.add(fileToUpload);
     imageInput.files = dataTransfer.files;
 
     const inputEvent = new Event('input', { bubbles: true });
@@ -669,13 +666,28 @@ async function sendDocument(attachment) {
     
     if (sendBtn) {
       const sendClickTarget = sendBtn.closest('div[role="button"]') || sendBtn.closest('button') || sendBtn;
+      
+      let waitForEnabled = 0;
+      while (sendClickTarget.hasAttribute('disabled') || sendClickTarget.getAttribute('aria-disabled') === 'true') {
+        console.log('[WhatsApp CRM] Send button is disabled, waiting...');
+        await sleep(500);
+        waitForEnabled++;
+        if (waitForEnabled > 20) {
+          console.log('[WhatsApp CRM] Send button still disabled after 10 seconds');
+          break;
+        }
+      }
+      
       sendClickTarget.click();
       console.log('[WhatsApp CRM] Clicked send button for document');
       await sleep(2000);
     } else {
-      console.log('[WhatsApp CRM] Send button not found, trying Enter key fallback...');
-      const activeElement = document.activeElement;
-      if (activeElement) {
+      console.log('[WhatsApp CRM] Send button not found after', maxAttempts, 'attempts, trying Enter key fallback...');
+      const captionInput = document.querySelector('div[contenteditable="true"][data-tab]') || 
+                           document.querySelector('footer div[contenteditable="true"]') ||
+                           document.activeElement;
+      if (captionInput) {
+        captionInput.focus();
         const enterEvent = new KeyboardEvent('keydown', {
           key: 'Enter',
           code: 'Enter',
@@ -684,11 +696,11 @@ async function sendDocument(attachment) {
           bubbles: true,
           cancelable: true,
         });
-        activeElement.dispatchEvent(enterEvent);
-        console.log('[WhatsApp CRM] Dispatched Enter key event as fallback');
+        captionInput.dispatchEvent(enterEvent);
+        console.log('[WhatsApp CRM] Dispatched Enter key event to caption input as fallback');
         await sleep(2000);
       } else {
-        console.error('[WhatsApp CRM] Send button not found for document after', maxAttempts, 'attempts and Enter fallback failed');
+        console.error('[WhatsApp CRM] Send button not found for document and Enter fallback failed');
         throw new Error('Send button not found for document attachment');
       }
     }
@@ -873,48 +885,31 @@ function base64ToBlob(dataUrl, forceImageType = false) {
   return new Blob([bytes], { type: mimeType });
 }
 
-async function convertToJpegBlob(originalBlob) {
-  return new Promise((resolve, reject) => {
+async function blobToJpeg(blob) {
+  console.log('[WhatsApp CRM] blobToJpeg called with blob type:', blob.type, 'size:', blob.size);
+  return new Promise((resolve) => {
     const img = new Image();
-    const url = URL.createObjectURL(originalBlob);
-    
+    const url = URL.createObjectURL(blob);
     img.onload = () => {
-      try {
-        const canvas = document.createElement('canvas');
-        canvas.width = img.width;
-        canvas.height = img.height;
-        
-        const ctx = canvas.getContext('2d');
-        
-        ctx.fillStyle = '#FFFFFF';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        
-        ctx.drawImage(img, 0, 0);
-        
-        canvas.toBlob(
-          (jpegBlob) => {
-            URL.revokeObjectURL(url);
-            if (jpegBlob) {
-              console.log('[WhatsApp CRM] Converted image to JPEG:', jpegBlob.size, 'bytes');
-              resolve(jpegBlob);
-            } else {
-              reject(new Error('Failed to convert image to JPEG'));
-            }
-          },
-          'image/jpeg',
-          0.95
-        );
-      } catch (error) {
+      console.log('[WhatsApp CRM] Image loaded for conversion, dimensions:', img.width, 'x', img.height);
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0);
+      canvas.toBlob((jpegBlob) => {
         URL.revokeObjectURL(url);
-        reject(error);
-      }
+        console.log('[WhatsApp CRM] Canvas toBlob complete, JPEG size:', jpegBlob ? jpegBlob.size : 'null', 'bytes');
+        resolve(jpegBlob);
+      }, 'image/jpeg', 0.95);
     };
-    
-    img.onerror = () => {
+    img.onerror = (err) => {
+      console.error('[WhatsApp CRM] Image load error:', err);
       URL.revokeObjectURL(url);
-      reject(new Error('Failed to load image for conversion'));
+      resolve(blob);
     };
-    
     img.src = url;
   });
 }
