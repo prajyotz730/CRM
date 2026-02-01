@@ -626,19 +626,19 @@ async function sendDocument(attachment) {
     await sleep(2500);
 
     const sendButtonSelectors = [
+      'div[aria-label="Send"]',
       'span[data-icon="send"]',
-      '[data-testid="send"]',
+      'div[data-testid="send"]',
+      'span[data-icon="send-light"]',
       '[data-testid="media-editor-send-button"]',
       'div[role="button"][aria-label="Send"]',
-      'div[aria-label="Send"]',
       'button[aria-label="Send"]',
-      'span[data-icon="send-light"]',
       'span[data-icon="send-filled"]',
     ];
     
     let sendBtn = null;
     let attempts = 0;
-    const maxAttempts = 20;
+    const maxAttempts = 30;
     
     while (!sendBtn && attempts < maxAttempts) {
       for (const selector of sendButtonSelectors) {
